@@ -5,6 +5,7 @@ from app.models.slm import NLUIntent, NLUIntentResult
 from app.models.domain import SystemConfig, PortfolioValuation
 from app.services.line_bot_service import LineBotService
 from app.services.slm_service import SLMService
+from app.core.config import settings
 
 
 @pytest.fixture
@@ -137,3 +138,54 @@ async def test_line_bot_slm_disabled_fallback(mock_repos):
         assert not slm_service.parse_intent.called
         assert service.reply_message.called
         assert "收到訊息：「隨便說一句話」" in service.reply_message.call_args[0][1][0].text
+
+
+@pytest.mark.asyncio
+async def test_rule_layer_intercepts_before_slm(mock_repos):
+    """P0-6：規則層必須攔在 SLM 之前，否則口語訊息仍會付費走模型。"""
+    config_repo, portfolio_repo, session_repo = mock_repos
+    slm_service = AsyncMock(spec=SLMService)
+
+    service = LineBotService(config_repo, portfolio_repo, session_repo, slm_service=slm_service)
+    service.reply_message = MagicMock()
+
+    # 僅覆寫需要的設定；整個 settings 換成 mock 會讓 fail-closed 白名單誤判為未授權
+    with patch.object(settings, "SLM_ENABLED", True),          patch.object(settings, "ALLOWED_LINE_USER_IDS", ["U123456"]):
+        await service._handle_text_message(
+            make_message_event("剛在 1050 買進 8 股台積電"), {}
+        )
+
+    # 規則層已處理完畢，SLM 不應被呼叫
+    slm_service.parse_intent.assert_not_awaited()
+    portfolio_repo.record_buy.assert_awaited_once()
+    kwargs = portfolio_repo.record_buy.await_args.kwargs
+    assert kwargs["ticker"] == "2330"
+    assert kwargs["price"] == 1050.0
+    assert kwargs["shares"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_slm_still_used_when_rules_cannot_parse(mock_repos):
+    """規則層無法辨識時才降級呼叫 SLM，兩層的分工不可顛倒。"""
+    config_repo, portfolio_repo, session_repo = mock_repos
+    slm_service = AsyncMock(spec=SLMService)
+    slm_service.parse_intent.return_value = NLUIntentResult(
+        intent=NLUIntent.QUERY_PORTFOLIO, confidence=0.9, raw_text="幫我看看那個東西"
+    )
+
+    sell_engine = AsyncMock()
+    sell_engine.get_portfolio_valuation.return_value = (
+        PortfolioValuation(items=[], total_cost=0.0, total_market_value=0.0,
+                           total_unrealized_pnl=0.0, total_pnl_rate=0.0),
+        SystemConfig(),
+    )
+
+    service = LineBotService(config_repo, portfolio_repo, session_repo, slm_service=slm_service)
+    service.reply_message = MagicMock()
+
+    with patch.object(settings, "SLM_ENABLED", True),          patch.object(settings, "ALLOWED_LINE_USER_IDS", ["U123456"]):
+        await service._handle_text_message(
+            make_message_event("幫我看看那個東西"), {"sell_engine": sell_engine}
+        )
+
+    slm_service.parse_intent.assert_awaited_once()

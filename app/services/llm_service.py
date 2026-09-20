@@ -5,6 +5,7 @@ from google.genai import types
 from app.models.domain import BuyCandidate
 from app.models.llm import BuyRecommendation
 from app.core.config import settings
+from app.core.gemini_options import thinking_kwargs
 from app.core.logging import logger
 from app.core.retry import with_retry
 
@@ -71,6 +72,8 @@ class LLMService:
                 response_mime_type="application/json",
                 response_schema=BuyRecommendation,
                 temperature=0.1,
+                max_output_tokens=settings.BUY_ANALYSIS_MAX_OUTPUT_TOKENS,
+                **thinking_kwargs(),
             )
 
             try:

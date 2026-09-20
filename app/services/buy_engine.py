@@ -6,6 +6,7 @@ from app.repositories.base import ConfigRepository, PortfolioRepository
 from app.services.market_service import MarketService
 from app.services.news_service import NewsService
 from app.services.llm_service import LLMService
+from app.services.news_filter import NewsRelevanceFilter
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -38,12 +39,15 @@ class BuyStrategyEngine:
         market_service: MarketService,
         news_service: NewsService,
         llm_service: LLMService,
+        news_filter: Optional[NewsRelevanceFilter] = None,
     ):
         self.config_repo = config_repo
         self.portfolio_repo = portfolio_repo
         self.market_service = market_service
         self.news_service = news_service
         self.llm_service = llm_service
+        # 預設自建，既有呼叫端無需改動；測試可注入自訂詞表
+        self.news_filter = news_filter or NewsRelevanceFilter()
 
     async def _resolve_name(self, ticker: str) -> str:
         """解析股票中文名稱 (優先從持股庫存查找，次之靜態表)"""
@@ -74,10 +78,37 @@ class BuyStrategyEngine:
         holdings = await self.portfolio_repo.get_all()
         all_tickers = list(dict.fromkeys(tickers + [h.ticker for h in holdings]))
 
-        qualified_candidates: List[BuyCandidate] = []
+        # 掃描為 I/O bound（yfinance / 新聞 / Gemini），以 semaphore 限流並行，
+        # 既縮短牆鐘時間又不至於觸發上游 rate limit。
+        semaphore = asyncio.Semaphore(max(1, settings.BUY_SCAN_CONCURRENCY))
 
         # 步驟 1 & 2：量化技術面過濾 (Close > 20MA) 與 動態預算/零股計算
-        for ticker in all_tickers:
+        quant_results = await asyncio.gather(
+            *(self._screen_ticker(t, budget, config, semaphore) for t in all_tickers)
+        )
+        qualified_candidates: List[BuyCandidate] = [c for c in quant_results if c is not None]
+
+        # 步驟 3 & 4：RAG 文本檢索、關鍵字預篩與 Gemini LLM 推論
+        analysis_results = await asyncio.gather(
+            *(self._analyze_candidate(c, semaphore) for c in qualified_candidates)
+        )
+        # gather 保證回傳順序與輸入一致，故建議清單順序仍是決定性的
+        buy_recommendations: List[Tuple[BuyRecommendation, BuyCandidate]] = [
+            r for r in analysis_results if r is not None
+        ]
+
+        logger.info(f"[BuyEngine] Buy scan completed. Generated {len(buy_recommendations)} recommendation(s).")
+        return buy_recommendations
+
+    async def _screen_ticker(
+        self,
+        ticker: str,
+        budget: float,
+        config: SystemConfig,
+        semaphore: asyncio.Semaphore,
+    ) -> Optional[BuyCandidate]:
+        """量化篩選單一標的；不符條件回傳 None。"""
+        async with semaphore:
             asset_type = self._detect_asset_type(ticker)
             name = await self._resolve_name(ticker)
 
@@ -86,19 +117,19 @@ class BuyStrategyEngine:
             )
             if current_close is None or sma_20 is None:
                 logger.info(f"[BuyEngine] {ticker} {name}: Missing price or SMA20 data, skipping.")
-                continue
+                return None
 
             # 量化條件：收盤價站上 20 日均線
             if current_close <= sma_20:
                 logger.info(
                     f"[BuyEngine] {ticker} {name}: Close (${current_close:.2f}) <= SMA20 (${sma_20:.2f}), filtered out."
                 )
-                continue
+                return None
 
             # 預算計算：計算零股股數 (包含除零防呆與動態匯率)
             if current_close <= 0:
                 logger.warning(f"[BuyEngine] {ticker} {name}: Invalid non-positive close price {current_close}, skipping.")
-                continue
+                return None
 
             effective_budget = budget
             if asset_type == "us_stock" and config.currency == "TWD":
@@ -110,10 +141,13 @@ class BuyStrategyEngine:
                 logger.info(
                     f"[BuyEngine] {ticker} {name}: Current price ${current_close:.2f} exceeds budget ${effective_budget:.2f}, filtered out."
                 )
-                continue
+                return None
 
             estimated_cost = round(target_shares * current_close, 2)
-            candidate = BuyCandidate(
+            logger.info(
+                f"[BuyEngine] Qualified quant filter: {ticker} {name} (Close: ${current_close:.2f} > 20MA: ${sma_20:.2f}, Shares: {target_shares})"
+            )
+            return BuyCandidate(
                 ticker=ticker,
                 name=name,
                 asset_type=asset_type,
@@ -123,19 +157,19 @@ class BuyStrategyEngine:
                 estimated_amount=estimated_cost,
                 currency="USD" if asset_type == "us_stock" else "TWD",
             )
-            qualified_candidates.append(candidate)
-            logger.info(
-                f"[BuyEngine] Qualified quant filter: {ticker} {name} (Close: ${current_close:.2f} > 20MA: ${sma_20:.2f}, Shares: {target_shares})"
-            )
 
-        # 步驟 3 & 4：RAG 文本檢索與 Gemini LLM 推論
-        buy_recommendations: List[Tuple[BuyRecommendation, BuyCandidate]] = []
-
-        for candidate in qualified_candidates:
+    async def _analyze_candidate(
+        self, candidate: BuyCandidate, semaphore: asyncio.Semaphore
+    ) -> Optional[Tuple[BuyRecommendation, BuyCandidate]]:
+        """檢索新聞、執行預篩、呼叫 Gemini；非 BUY 或失敗回傳 None。"""
+        async with semaphore:
             logger.info(f"[BuyEngine] Fetching recent 3-day news for {candidate.ticker} {candidate.name}...")
             news_text = await self.news_service.get_recent_news_text(
                 candidate.ticker, candidate.name, candidate.asset_type
             )
+
+            if not self._passes_prefilter(candidate, news_text):
+                return None
 
             try:
                 rec: BuyRecommendation = await asyncio.to_thread(
@@ -144,11 +178,42 @@ class BuyStrategyEngine:
                 logger.info(
                     f"[BuyEngine] LLM Decision for {candidate.ticker} {candidate.name}: {rec.decision} (Confidence: {rec.confidence_score:.2f})"
                 )
-
                 if rec.decision == "BUY":
-                    buy_recommendations.append((rec, candidate))
+                    return (rec, candidate)
             except Exception as e:
                 logger.error(f"[BuyEngine] LLM analysis failed for {candidate.ticker}: {e}")
+            return None
 
-        logger.info(f"[BuyEngine] Buy scan completed. Generated {len(buy_recommendations)} recommendation(s).")
-        return buy_recommendations
+    def _passes_prefilter(self, candidate: BuyCandidate, news_text: str) -> bool:
+        """關鍵字預篩。回傳 False 代表本標的不送 Gemini。
+
+        僅在 `NEWS_FILTER_MODE=enforce` 時才真的淘汰；預設 `shadow` 只記錄判定以供
+        量測 recall／precision。任何異常一律 fail-open（放行給 Gemini），
+        因為漏掉真利多的代價遠高於多花一次呼叫。
+        """
+        mode = (settings.NEWS_FILTER_MODE or "shadow").strip().lower()
+        if mode == "off":
+            return True
+
+        try:
+            verdict = self.news_filter.evaluate(news_text)
+        except Exception as e:
+            logger.warning(f"[BuyEngine] News prefilter errored for {candidate.ticker}, failing open: {e}")
+            return True
+
+        if mode == "enforce":
+            if not verdict.passed:
+                logger.info(
+                    f"[BuyEngine] Prefilter(enforce) dropped {candidate.ticker} {candidate.name}: {verdict.summary}"
+                )
+                return False
+            logger.info(
+                f"[BuyEngine] Prefilter(enforce) kept {candidate.ticker} {candidate.name}: {verdict.summary}"
+            )
+            return True
+
+        # shadow：只觀測，不影響結果
+        logger.info(
+            f"[BuyEngine] Prefilter(shadow) {candidate.ticker} {candidate.name}: {verdict.summary}"
+        )
+        return True

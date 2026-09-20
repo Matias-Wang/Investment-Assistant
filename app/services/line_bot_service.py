@@ -30,6 +30,7 @@ from app.models.domain import SystemConfig, SellAlert, BuyCandidate, MarketIndex
 from app.models.llm import BuyRecommendation, MarketReport
 from app.models.slm import NLUIntent, NLUIntentResult
 from app.services.slm_service import SLMService
+from app.services.nlu_rules import RuleBasedNLU
 from app.repositories.base import ConfigRepository, PortfolioRepository, SessionRepository
 from app.utils.flex_templates import (
     build_buy_flex_message,
@@ -47,7 +48,7 @@ class LineBotService:
     - 動態指令解析 (設定預算/停利/停損、查詢庫存、觸發買賣)
     - 多輪對話流狀態機 (手動買入/賣出確認與庫存更新)
     - Flex Message 推播與回覆
-    - 整合 SLM (Small Language Model) 自然語言理解與智慧意圖提取
+    - 確定性口語解析 (規則層)，並以 SLM 作為選用 fallback
     """
 
     def __init__(
@@ -56,11 +57,14 @@ class LineBotService:
         portfolio_repo: PortfolioRepository,
         session_repo: SessionRepository,
         slm_service: Optional[SLMService] = None,
+        rule_nlu: Optional[RuleBasedNLU] = None,
     ):
         self.config_repo = config_repo
         self.portfolio_repo = portfolio_repo
         self.session_repo = session_repo
         self.slm_service = slm_service
+        # 確定性解析器一律啟用：無外部依賴、無成本，且優先於 SLM
+        self.rule_nlu = rule_nlu or RuleBasedNLU()
 
         self.channel_secret = settings.LINE_CHANNEL_SECRET
         self.channel_token = settings.LINE_CHANNEL_ACCESS_TOKEN
@@ -487,7 +491,11 @@ class LineBotService:
             self.reply_message(reply_token, [TextMessage(text=help_text)])
             return
 
-        # 11. SLM 自然語言意圖理解與槽位提取 (若已配置且 SLM_ENABLED=True)
+        # 11. 確定性口語解析 (0ms / 零成本 / 可完整測試)，優先於任何模型推論
+        if await self._handle_rule_nlu(event, text, engines_dict):
+            return
+
+        # 12. SLM 自然語言意圖理解與槽位提取 (僅在規則層無法辨識且 SLM_ENABLED=True 時)
         if self.slm_service and settings.SLM_ENABLED:
             handled = await self._handle_slm_nlu(event, text, engines_dict)
             if handled:
@@ -499,13 +507,25 @@ class LineBotService:
             [TextMessage(text=f"收到訊息：「{text}」。輸入「說明」或「查詢庫存」查看更多操作！")]
         )
 
+    async def _handle_rule_nlu(self, event: MessageEvent, text: str, engines_dict: Dict[str, Any]) -> bool:
+        """確定性口語解析：0ms、零成本、可完整測試，優先於任何模型推論。"""
+        try:
+            nlu_res = self.rule_nlu.parse(text)
+        except Exception as e:
+            # 解析器自身異常不得影響服務，降級交由後續 SLM / 預設訊息處理
+            logger.warning(f"[LineBotService] Rule-based NLU failed: {e}")
+            return False
+
+        if nlu_res.intent == NLUIntent.UNKNOWN:
+            return False
+
+        logger.info(f"[LineBotService] Handled via rule-based NLU: {nlu_res.intent}")
+        return await self._execute_nlu_intent(event, nlu_res, engines_dict)
+
     async def _handle_slm_nlu(self, event: MessageEvent, text: str, engines_dict: Dict[str, Any]) -> bool:
         """
         委派 SLM (Small Language Model) 進行自然語言意圖辨識與自動操作
         """
-        reply_token = event.reply_token
-        user_id = event.source.user_id
-
         try:
             nlu_res = await self.slm_service.parse_intent(text)
         except Exception as e:
@@ -516,6 +536,14 @@ class LineBotService:
             return False
 
         logger.info(f"[LineBotService] Handled via SLM NLU: {nlu_res.intent} (conf: {nlu_res.confidence})")
+        return await self._execute_nlu_intent(event, nlu_res, engines_dict)
+
+    async def _execute_nlu_intent(
+        self, event: MessageEvent, nlu_res: NLUIntentResult, engines_dict: Dict[str, Any]
+    ) -> bool:
+        """依已解析出的意圖執行動作。解析來源（規則或 SLM）不影響此處行為。"""
+        reply_token = event.reply_token
+        user_id = event.source.user_id
 
         # 1. 買入記帳
         if nlu_res.intent == NLUIntent.RECORD_BUY:

@@ -9,6 +9,7 @@ from app.models.llm import MarketReport
 from app.repositories.base import PortfolioRepository
 from app.services.news_service import NewsService
 from app.core.config import settings
+from app.core.gemini_options import thinking_kwargs
 from app.core.logging import logger
 from app.core.retry import with_retry
 
@@ -78,6 +79,8 @@ class MarketReportService:
             response_mime_type="application/json",
             response_schema=MarketReport,
             temperature=0.2,
+            max_output_tokens=settings.MARKET_REPORT_MAX_OUTPUT_TOKENS,
+            **thinking_kwargs(),
         )
         try:
             response = client.models.generate_content(

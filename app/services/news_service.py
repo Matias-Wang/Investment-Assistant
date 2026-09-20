@@ -5,6 +5,7 @@ import httpx
 from bs4 import BeautifulSoup
 import yfinance as yf
 from app.models.domain import NewsItem
+from app.core.config import settings
 from app.core.logging import logger
 from app.core.retry import with_retry, with_async_retry
 
@@ -17,6 +18,26 @@ class NewsService:
 
     def __init__(self, timeout_seconds: float = 10.0):
         self.timeout = timeout_seconds
+        # 新聞文本快取：key 為 "ticker|asset_type"，value 為 (寫入時間戳, 文本)
+        # 買入掃描與市場快報可能在短時間內重複詢問同一標的，重抓只會多耗時並增加被限流的機會
+        self._news_cache: dict[str, tuple[float, str]] = {}
+
+    def _cache_get(self, key: str) -> Optional[str]:
+        ttl = settings.NEWS_CACHE_TTL_SECONDS
+        if ttl <= 0:
+            return None
+        entry = self._news_cache.get(key)
+        if not entry:
+            return None
+        cached_at, text = entry
+        if time.time() - cached_at > ttl:
+            self._news_cache.pop(key, None)
+            return None
+        return text
+
+    def _cache_put(self, key: str, text: str) -> None:
+        if settings.NEWS_CACHE_TTL_SECONDS > 0:
+            self._news_cache[key] = (time.time(), text)
 
     @with_retry(max_attempts=3, initial_delay=1.0)
     def fetch_yfinance_news(self, ticker: str, asset_type: str = "tw_stock") -> List[NewsItem]:
@@ -112,6 +133,13 @@ class NewsService:
         獲取標的近 3 日所有可用新聞並組裝為 Markdown 格式之 RAG 檢索文本
         """
         import asyncio
+
+        cache_key = f"{ticker.strip().upper()}|{asset_type}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.info(f"[NewsService] Cache hit for {ticker} ({asset_type}), skipping refetch.")
+            return cached
+
         news_items: List[NewsItem] = []
 
         # 1. 抓取 Google News RSS
@@ -138,6 +166,8 @@ class NewsService:
                 unique_news.append(n)
 
         if not unique_news:
+            # 刻意不快取空結果：抓取失敗與「真的沒新聞」在此無法區分，
+            # 若快取下來會讓後續一小時內都看不到實際存在的新聞。
             return "【近 3 日查無任何相關財經新聞或市場報導】"
 
         # 組裝為清晰的文本格式
@@ -148,4 +178,6 @@ class NewsService:
                 text_lines.append(f"發布時間：{item.published_at} | 來源：{item.publisher}")
             text_lines.append(f"摘要內容：{item.snippet}\n")
 
-        return "\n".join(text_lines)
+        news_text = "\n".join(text_lines)
+        self._cache_put(cache_key, news_text)
+        return news_text

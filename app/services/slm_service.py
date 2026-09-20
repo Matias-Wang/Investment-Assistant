@@ -6,6 +6,7 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.models.slm import NLUIntent, NLUIntentResult
+from app.services.ticker_alias import TICKER_ALIASES
 
 
 class SLMService:
@@ -16,25 +17,9 @@ class SLMService:
     專責高效能、低延遲之意圖識別 (NLU) 與槽位抽取 (Slot Filling)
     """
 
-    KNOWN_TICKER_MAP: Dict[str, str] = {
-        "台積電": "2330",
-        "台積": "2330",
-        "聯發科": "2454",
-        "發哥": "2454",
-        "廣達": "2382",
-        "光聖": "6442",
-        "華通": "2313",
-        "鴻海": "2317",
-        "大立光": "3008",
-        "富邦金": "2881",
-        "國泰金": "2882",
-        "輝達": "NVDA",
-        "特斯拉": "TSLA",
-        "蘋果": "AAPL",
-        "微軟": "MSFT",
-        "谷哥": "GOOGL",
-        "谷歌": "GOOGL",
-    }
+    # 別名表的單一資料來源為 app/services/ticker_alias.py，
+    # 避免與確定性解析器 (nlu_rules) 各維護一份而失去同步。
+    KNOWN_TICKER_MAP: Dict[str, str] = TICKER_ALIASES
 
     SYSTEM_PROMPT = """你是一位極度嚴謹且高效的個人投資助理 NLU 解析器。
 你的任務是將使用者的自然語言訊息精確解析為結構化 JSON，絕對不要輸出任何多餘文字或 Markdown 標籤。

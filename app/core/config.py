@@ -34,6 +34,27 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
+    # Gemini 輸出成本控制 (output token 單價為 input 的 8.3 倍，是主要成本來源)
+    # 上限需留足夠餘裕：response_schema 為 JSON，截斷會導致反序列化失敗而整筆作廢
+    BUY_ANALYSIS_MAX_OUTPUT_TOKENS: int = 800
+    MARKET_REPORT_MAX_OUTPUT_TOKENS: int = 1024
+    # 選用的 thinking 上限 (thinking token 併入 output 計價)。
+    # 空字串 = 不傳送此參數，沿用模型預設 (gemini-3.5-flash-lite 預設為 Off)。
+    # 若改用 thinking 預設開啟的模型 (如 3.x Flash)，設為 "MINIMAL" 可避免費用暴增。
+    GEMINI_THINKING_LEVEL: str = ""
+
+    # 買入掃描效能與成本
+    # 並行度：掃描為 I/O bound (yfinance + 新聞 + Gemini)，並行可大幅縮短牆鐘時間；
+    # 上限刻意保守以避免觸發 Gemini / yfinance 的 rate limit (429)。
+    BUY_SCAN_CONCURRENCY: int = 3
+    # 新聞快取存活秒數：同一標的同一日重複掃描時不重抓 (0 = 停用快取)
+    NEWS_CACHE_TTL_SECONDS: int = 3600
+    # 新聞關鍵字預篩模式：
+    #   off     = 完全不執行
+    #   shadow  = 執行並記錄判定，但不淘汰任何標的 (預設，用於量測 recall/precision)
+    #   enforce = 實際淘汰未通過預篩的標的，不送 Gemini
+    NEWS_FILTER_MODE: str = "shadow"
+
     # SLM (Small Language Model - OpenAI Compatible Endpoint, e.g. Colab / vLLM / Ollama)
     SLM_ENABLED: bool = False
     SLM_ENDPOINT_URL: str = "http://localhost:8000/v1"
