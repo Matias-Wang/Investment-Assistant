@@ -55,6 +55,26 @@ class Settings(BaseSettings):
     #   enforce = 實際淘汰未通過預篩的標的，不送 Gemini
     NEWS_FILTER_MODE: str = "shadow"
 
+    # --- SLM 幻覺驗證層 (NLI entailment) ---------------------------------
+    # 專案宣稱「嚴格禁止臆測」，但該限制原本只存在於提示詞中、無任何驗證。
+    # 此層以小型 NLI 模型逐條檢查 Gemini 的 reasons 是否真被新聞文本支持。
+    #   off      = 不執行
+    #   shadow   = 執行並記錄，不影響結果 (預設，用於量測攔截率與誤殺率)
+    #   annotate = 於推播卡片標示各理由的驗證狀態
+    #   enforce  = 接地比例未達門檻者不推播買入建議
+    GROUNDING_MODE: str = "shadow"
+    # ONNX 模型與 tokenizer 路徑 (由 slm/colab_nli_export.ipynb 產出並隨映像打包)
+    GROUNDING_MODEL_PATH: str = "models/nli/model_quantized.onnx"
+    GROUNDING_TOKENIZER_PATH: str = "models/nli/tokenizer.json"
+    # 模型輸出的標籤順序，必須與所選模型的 config.id2label 一致，
+    # 由匯出腳本印出後填入；填錯會讓 entailment 與 contradiction 對調。
+    GROUNDING_LABEL_ORDER: str = "entailment,neutral,contradiction"
+    # 單一理由被視為「有被新聞支持」所需的 entailment 機率
+    GROUNDING_ENTAILMENT_THRESHOLD: float = 0.5
+    # enforce 模式下，通過的理由需佔全部理由的比例
+    GROUNDING_MIN_GROUNDED_RATIO: float = 0.5
+    GROUNDING_MAX_SEQ_LENGTH: int = 512
+
     # SLM (Small Language Model - OpenAI Compatible Endpoint, e.g. Colab / vLLM / Ollama)
     SLM_ENABLED: bool = False
     SLM_ENDPOINT_URL: str = "http://localhost:8000/v1"

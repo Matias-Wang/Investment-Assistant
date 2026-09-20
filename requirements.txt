@@ -16,3 +16,9 @@ pandas>=2.2.0
 numpy>=1.26.0
 pytest>=8.2.0
 pytest-asyncio>=0.23.0
+
+# SLM 幻覺驗證層 (NLI entailment) — 僅推論，刻意不引入 torch/transformers
+# 模型於 Colab 量化匯出為 ONNX，容器內只需 runtime 與 tokenizer
+onnxruntime>=1.18.0
+tokenizers>=0.19.0
+

@@ -7,6 +7,7 @@ from app.services.market_service import MarketService
 from app.services.news_service import NewsService
 from app.services.llm_service import LLMService
 from app.services.news_filter import NewsRelevanceFilter
+from app.services.grounding_verifier import GroundingVerifier
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -40,6 +41,7 @@ class BuyStrategyEngine:
         news_service: NewsService,
         llm_service: LLMService,
         news_filter: Optional[NewsRelevanceFilter] = None,
+        grounding_verifier: Optional[GroundingVerifier] = None,
     ):
         self.config_repo = config_repo
         self.portfolio_repo = portfolio_repo
@@ -48,6 +50,8 @@ class BuyStrategyEngine:
         self.llm_service = llm_service
         # 預設自建，既有呼叫端無需改動；測試可注入自訂詞表
         self.news_filter = news_filter or NewsRelevanceFilter()
+        # 幻覺驗證層：模型為 lazy load，建構此物件不會載入任何權重
+        self.grounding_verifier = grounding_verifier or GroundingVerifier()
 
     async def _resolve_name(self, ticker: str) -> str:
         """解析股票中文名稱 (優先從持股庫存查找，次之靜態表)"""
@@ -179,10 +183,52 @@ class BuyStrategyEngine:
                     f"[BuyEngine] LLM Decision for {candidate.ticker} {candidate.name}: {rec.decision} (Confidence: {rec.confidence_score:.2f})"
                 )
                 if rec.decision == "BUY":
+                    if not await self._passes_grounding(candidate, rec, news_text):
+                        return None
                     return (rec, candidate)
             except Exception as e:
                 logger.error(f"[BuyEngine] LLM analysis failed for {candidate.ticker}: {e}")
             return None
+
+    async def _passes_grounding(
+        self, candidate: BuyCandidate, rec: BuyRecommendation, news_text: str
+    ) -> bool:
+        """SLM 幻覺驗證：檢查 rec.reasons 是否真被新聞文本支持。
+
+        僅對 `decision == "BUY"` 執行——HOLD/AVOID 不會推播，驗證它們沒有意義且浪費算力。
+        回傳 False 僅發生於 `GROUNDING_MODE=enforce` 且接地比例未達門檻。
+        任何異常或模型未就緒一律 fail-open。
+        """
+        mode = (settings.GROUNDING_MODE or "shadow").strip().lower()
+        if mode == "off":
+            return True
+
+        try:
+            report = await asyncio.to_thread(
+                self.grounding_verifier.verify, news_text, rec.reasons
+            )
+        except Exception as e:
+            logger.warning(f"[BuyEngine] 幻覺驗證異常，fail-open 放行 {candidate.ticker}：{e}")
+            return True
+
+        logger.info(
+            f"[BuyEngine] Grounding({mode}) {candidate.ticker} {candidate.name}: {report.summary}"
+        )
+
+        if mode == "annotate" and report.verified:
+            # 把驗證狀態寫回理由文字，讓推播卡片直接呈現哪幾條有據
+            rec.reasons = [f"{c.badge} {c.reason}" for c in report.checks]
+            return True
+
+        if mode == "enforce":
+            if not report.passes(settings.GROUNDING_MIN_GROUNDED_RATIO):
+                logger.warning(
+                    f"[BuyEngine] Grounding(enforce) 攔下 {candidate.ticker} {candidate.name}："
+                    f"{report.summary}"
+                )
+                return False
+
+        return True
 
     def _passes_prefilter(self, candidate: BuyCandidate, news_text: str) -> bool:
         """關鍵字預篩。回傳 False 代表本標的不送 Gemini。

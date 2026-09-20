@@ -17,6 +17,11 @@ __pycache__/
 .coverage
 htmlcov/
 
+# 模型權重（110~340MB 二進位檔，不進 git；由 slm/colab_nli_export.ipynb 產出）
+models/**/*.onnx
+models/**/tokenizer.json
+models/**/*.bin
+
 # Local Data
 data/*.tmp
 data/
