@@ -33,5 +33,8 @@ AGENTS.md
 SLM_PLAN.md
 SLM_ROADMAP.md
 
+# Claude Code 本機設定（角色提示詞與 skill，與 CLAUDE.md 同性質，不進倉）
+.claude/
+
 eval/
 slm/
