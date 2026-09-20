@@ -1,0 +1,23 @@
+# Secrets — 絕對不可進入映像層
+.env
+.env.*
+.env.yaml
+
+# 本機環境與快取
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 本機資料與稽核結果
+data/
+eval/
+
+# 開發用檔案
+tests/
+.git/
+.claude/
+*.md
+SLM_PLAN.md
+SLM_ROADMAP.md

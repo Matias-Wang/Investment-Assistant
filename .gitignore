@@ -1,0 +1,37 @@
+# Environments & Secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Data
+data/*.tmp
+data/
+
+# OS Artifacts
+.DS_Store
+Thumbs.db
+*.log
+
+# LLM / Docs / Local Plans
+CLAUDE.md
+AGNETS.md
+AGENTS.md
+SLM_PLAN.md
+SLM_ROADMAP.md
+
+eval/
+slm/
