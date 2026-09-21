@@ -159,8 +159,11 @@ class GroundingVerifier:
             tokenizer = Tokenizer.from_file(str(tok_file))
             tokenizer.enable_truncation(max_length=self.max_seq_length)
             opts = ort.SessionOptions()
-            # Cloud Run 的 vCPU 有限，放任 ORT 開滿執行緒反而與事件迴圈搶資源
-            opts.intra_op_num_threads = 1
+            # 實測（8 核）：1/2/4 執行緒分別為 121.6/89.8/62.0ms，而放任 ORT 自行決定
+            # （開滿 8 核）反而慢到 315.9ms——執行緒互搶。故一律顯式指定。
+            threads = settings.GROUNDING_INTRA_OP_THREADS
+            if threads > 0:
+                opts.intra_op_num_threads = threads
             session = ort.InferenceSession(
                 str(model_file), sess_options=opts, providers=["CPUExecutionProvider"]
             )

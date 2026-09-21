@@ -69,11 +69,23 @@ class Settings(BaseSettings):
     # 模型輸出的標籤順序，必須與所選模型的 config.id2label 一致，
     # 由匯出腳本印出後填入；填錯會讓 entailment 與 contradiction 對調。
     GROUNDING_LABEL_ORDER: str = "entailment,neutral,contradiction"
-    # 單一理由被視為「有被新聞支持」所需的 entailment 機率
-    GROUNDING_ENTAILMENT_THRESHOLD: float = 0.5
+    # 單一理由被視為「有被新聞支持」所需的 entailment 機率。
+    # 2026-09-21 以 36 真 + 36 假理由（真實台股新聞，Gemini 生成）實測 mDeBERTa int8：
+    #   AUC = 0.910（強鑑別力）；真理由平均 0.421、假理由平均 0.219
+    #   門檻掃描  攔截率 / 誤殺率：
+    #     0.22 -> 0.556 / 0.083    0.25 -> 0.750 / 0.111
+    #     0.30 -> 0.944 / 0.250    0.50 -> 1.000 / 0.722
+    # 此模型在中文財經語域的 entailment 分數整體偏低，0.5 會落在真理由分佈的上緣
+    # （P75 = 0.520），導致大量誤殺。0.25 是 annotate 模式下誤殺與攔截的較佳平衡。
+    GROUNDING_ENTAILMENT_THRESHOLD: float = 0.25
     # enforce 模式下，通過的理由需佔全部理由的比例
     GROUNDING_MIN_GROUNDED_RATIO: float = 0.5
     GROUNDING_MAX_SEQ_LENGTH: int = 512
+    # onnxruntime 的 intra-op 執行緒數。本機 8 核實測（mDeBERTa int8，單次句對推論）：
+    #   1 執行緒 121.6ms / 2 執行緒 89.8ms / 4 執行緒 62.0ms / 預設(全部 8) 315.9ms
+    # 開滿反而最慢（執行緒互搶）。預設 1 是為 Cloud Run 常見的 1 vCPU 而設，
+    # 在多核機器上可調為 2~4。0 = 交給 onnxruntime 自行決定（不建議）。
+    GROUNDING_INTRA_OP_THREADS: int = 1
 
     # SLM (Small Language Model - OpenAI Compatible Endpoint, e.g. Colab / vLLM / Ollama)
     SLM_ENABLED: bool = False
