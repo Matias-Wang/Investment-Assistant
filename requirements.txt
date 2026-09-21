@@ -22,3 +22,6 @@ pytest-asyncio>=0.23.0
 onnxruntime>=1.18.0
 tokenizers>=0.19.0
 
+# 耗時工作派送：讓 Cloud Run 得以縮到零而不犧牲背景工作可靠性
+google-cloud-tasks>=2.16.0
+

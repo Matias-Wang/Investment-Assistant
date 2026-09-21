@@ -153,4 +153,7 @@ async def test_trigger_market_report_endpoint_push(mock_market_report, mock_indi
 
     result = await trigger_market_report(mock_request, push=True)
     assert result["pushed"] is True
-    line_service.push_market_report.assert_awaited_once_with(mock_market_report, mock_indices)
+    # 端點新增 user_id 參數以支援 Cloud Tasks 指定推播對象
+    line_service.push_market_report.assert_awaited_once_with(
+        mock_market_report, mock_indices, target_user_id=None
+    )

@@ -60,9 +60,11 @@ class Settings(BaseSettings):
     # 此層以小型 NLI 模型逐條檢查 Gemini 的 reasons 是否真被新聞文本支持。
     #   off      = 不執行
     #   shadow   = 執行並記錄，不影響結果 (預設，用於量測攔截率與誤殺率)
-    #   annotate = 於推播卡片標示各理由的驗證狀態
+    #   annotate = 於推播卡片標示各理由的驗證狀態（預設，2026-09-21 量測後改採）
     #   enforce  = 接地比例未達門檻者不推播買入建議
-    GROUNDING_MODE: str = "shadow"
+    # 為何預設 annotate 而非 enforce：t=0.25 時誤殺率 0.111，約每 9 筆合法建議會被
+    # 擋掉 1 筆。annotate 的誤判只是標示不準，使用者仍看得到原始理由可自行判斷。
+    GROUNDING_MODE: str = "annotate"
     # ONNX 模型與 tokenizer 路徑 (由 slm/colab_nli_export.ipynb 產出並隨映像打包)
     GROUNDING_MODEL_PATH: str = "models/nli/model_quantized.onnx"
     GROUNDING_TOKENIZER_PATH: str = "models/nli/tokenizer.json"
@@ -100,6 +102,15 @@ class Settings(BaseSettings):
     MAX_RETRY_ATTEMPTS: int = 3
     RETRY_INITIAL_DELAY: float = 1.0
     RETRY_BACKOFF_FACTOR: float = 2.0
+
+    # --- 耗時工作派送 (Cloud Tasks) ---------------------------------------
+    # LINE 要求 webhook 5 秒內回應，但買入掃描約 90 秒，故必須非同步執行。
+    # Cloud Run 在「僅於處理請求時分配 CPU」模式下，回應後的背景工作會被節流而
+    # 可能跑不完；改由 Cloud Tasks 發新請求回到 /api/trigger/*，即可重新取得 CPU。
+    # 三項皆留空時退回 asyncio 背景執行（本機開發用，本機無節流問題）。
+    SERVICE_BASE_URL: str = ""          # 例：https://investment-assistant-xxxx.a.run.app
+    TASK_QUEUE_NAME: str = ""           # 例：investment-jobs
+    TASK_QUEUE_LOCATION: str = "asia-east1"
 
     # Security & Administration
     ADMIN_API_KEY: str = ""

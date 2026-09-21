@@ -31,6 +31,7 @@ from app.models.llm import BuyRecommendation, MarketReport
 from app.models.slm import NLUIntent, NLUIntentResult
 from app.services.slm_service import SLMService
 from app.services.nlu_rules import RuleBasedNLU
+from app.services.task_dispatcher import TaskDispatcher
 from app.repositories.base import ConfigRepository, PortfolioRepository, SessionRepository
 from app.utils.flex_templates import (
     build_buy_flex_message,
@@ -58,6 +59,7 @@ class LineBotService:
         session_repo: SessionRepository,
         slm_service: Optional[SLMService] = None,
         rule_nlu: Optional[RuleBasedNLU] = None,
+        task_dispatcher: Optional[TaskDispatcher] = None,
     ):
         self.config_repo = config_repo
         self.portfolio_repo = portfolio_repo
@@ -65,6 +67,8 @@ class LineBotService:
         self.slm_service = slm_service
         # 確定性解析器一律啟用：無外部依賴、無成本，且優先於 SLM
         self.rule_nlu = rule_nlu or RuleBasedNLU()
+        # 耗時工作交由佇列執行；未配置 Cloud Tasks 時自動退回本地背景執行
+        self.task_dispatcher = task_dispatcher or TaskDispatcher()
 
         self.channel_secret = settings.LINE_CHANNEL_SECRET
         self.channel_token = settings.LINE_CHANNEL_ACCESS_TOKEN
@@ -415,7 +419,7 @@ class LineBotService:
                         logger.exception(f"[LineBotService] Background buy scan failed: {scan_err}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 買入策略掃描執行過程中發生異常，請稍後再試。")])
 
-                asyncio.create_task(_background_buy_scan())
+                await self.task_dispatcher.dispatch("buy-scan", user_id=user_id, fallback=_background_buy_scan)
             return
 
         # 7. 手動觸發賣出檢查 (非同步背景掃描，避免 reply_token 逾時)
@@ -437,7 +441,7 @@ class LineBotService:
                     except Exception as e:
                         logger.exception(f"[LineBotService] Error in background sell check: {e}")
 
-                asyncio.create_task(_background_sell_check())
+                await self.task_dispatcher.dispatch("sell-check", user_id=user_id, fallback=_background_sell_check)
             return
 
         # 8. 智能市場快訊報告生成 (非同步背景生成，避免 reply_token 逾時)
@@ -455,7 +459,7 @@ class LineBotService:
                         logger.exception(f"[LineBotService] Error generating market report: {e}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 市場報告生成失敗，請稍後再試。")])
 
-                asyncio.create_task(_background_market_report())
+                await self.task_dispatcher.dispatch("market-report", user_id=user_id, fallback=_background_market_report)
             else:
                 self.reply_message(reply_token, [TextMessage(text="⚠️ 市場報告模組正在初始化，請稍後再試。")])
             return
@@ -696,7 +700,7 @@ class LineBotService:
                     except Exception as e:
                         logger.exception(f"[LineBotService] Error generating market report: {e}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 市場報告生成失敗，請稍後再試。")])
-                asyncio.create_task(_background_market_report())
+                await self.task_dispatcher.dispatch("market-report", user_id=user_id, fallback=_background_market_report)
             return True
 
         # 7. 買入建議
@@ -715,7 +719,7 @@ class LineBotService:
                     except Exception as scan_err:
                         logger.exception(f"[LineBotService] Background buy scan failed: {scan_err}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 買入策略掃描執行過程中發生異常，請稍後再試。")])
-                asyncio.create_task(_background_buy_scan())
+                await self.task_dispatcher.dispatch("buy-scan", user_id=user_id, fallback=_background_buy_scan)
             return True
 
         # 8. 賣出檢查
@@ -734,7 +738,7 @@ class LineBotService:
                                 await self.push_sell_alert(alert, target_user_id=user_id)
                     except Exception as e:
                         logger.exception(f"[LineBotService] Error in background sell check: {e}")
-                asyncio.create_task(_background_sell_check())
+                await self.task_dispatcher.dispatch("sell-check", user_id=user_id, fallback=_background_sell_check)
             return True
 
         # 9. 選單

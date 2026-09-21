@@ -99,18 +99,51 @@ async def manual_record_sell(trade: ManualTradeRequest, request: Request):
 
 
 @router.post("/trigger/sell-check", response_model=List[SellAlert], dependencies=[Depends(verify_admin)])
-async def trigger_sell_check(request: Request):
-    """手動觸發賣出監控掃描 (Rule Engine)"""
+async def trigger_sell_check(
+    request: Request,
+    # 刻意不用 Query(default=...)：那會讓直接呼叫函式的測試拿到 Query 物件
+    # （且它是 truthy），FastAPI 對非路徑的純量參數本來就會視為查詢參數。
+    push: bool = False,
+    user_id: Optional[str] = None,
+):
+    """觸發賣出監控掃描 (Rule Engine)。
+
+    同步完成後才回應，故可安全地由 Cloud Scheduler 或 Cloud Tasks 呼叫——
+    Cloud Run 在請求處理期間會持續分配 CPU。
+    """
     sell_engine = request.app.state.sell_engine
     alerts = await sell_engine.scan_portfolio()
+    line_service = getattr(request.app.state, "line_service", None)
+    if push and line_service:
+        for alert in alerts:
+            await line_service.push_sell_alert(alert, target_user_id=user_id)
     return alerts
 
 
 @router.post("/trigger/buy-scan", dependencies=[Depends(verify_admin)])
-async def trigger_buy_scan(request: Request):
-    """手動觸發買入策略掃描 (Quant + RAG + LLM)"""
+async def trigger_buy_scan(
+    request: Request,
+    push: bool = False,
+    user_id: Optional[str] = None,
+):
+    """觸發買入策略掃描 (Quant + RAG + LLM)。
+
+    同步完成後才回應（約 90 秒），故可安全地由 Cloud Scheduler 或 Cloud Tasks 呼叫。
+    幻覺驗證層的模型會在此路徑首次使用時載入。
+    """
     buy_engine = request.app.state.buy_engine
     results = await buy_engine.scan_candidates()
+    line_service = getattr(request.app.state, "line_service", None)
+    if push and line_service:
+        if not results:
+            from linebot.v3.messaging import TextMessage
+            target = user_id or None
+            line_service.push_message(
+                target or settings.LINE_USER_ID,
+                [TextMessage(text="ℹ️ 今日掃描完成：目前觀察名單中尚無同時符合 20MA 與 AI 買入評級之標的。")],
+            )
+        for rec, candidate in results:
+            await line_service.push_buy_recommendation(rec, candidate, target_user_id=user_id)
     return [
         {
             "recommendation": rec.model_dump(),
@@ -121,7 +154,11 @@ async def trigger_buy_scan(request: Request):
 
 
 @router.post("/trigger/market-report", dependencies=[Depends(verify_admin)])
-async def trigger_market_report(request: Request, push: bool = Query(default=False)):
+async def trigger_market_report(
+    request: Request,
+    push: bool = False,
+    user_id: Optional[str] = None,
+):
     """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE"""
     market_report_service = getattr(request.app.state, "market_report_service", None)
     line_service = getattr(request.app.state, "line_service", None)
@@ -130,7 +167,7 @@ async def trigger_market_report(request: Request, push: bool = Query(default=Fal
     report, indices = await market_report_service.generate_market_report()
     pushed = False
     if push and line_service:
-        await line_service.push_market_report(report, indices)
+        await line_service.push_market_report(report, indices, target_user_id=user_id)
         pushed = True
     return {
         "report": report.model_dump(),
