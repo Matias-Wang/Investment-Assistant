@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 import httpx
 from bs4 import BeautifulSoup
 import yfinance as yf
@@ -10,10 +10,77 @@ from app.core.logging import logger
 from app.core.retry import with_retry, with_async_retry
 
 
+def _parse_yf_datetime(raw: Any) -> Optional[datetime]:
+    """解析 yfinance 的時間欄位，容納 epoch 秒數與 ISO 8601 字串兩種格式。"""
+    if not raw:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(raw, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_yf_news_item(item: dict) -> Optional[tuple]:
+    """把 yfinance 的新聞項目正規化為 (標題, 來源, 連結, 摘要, 時間)。
+
+    yfinance 1.x 起改為嵌套結構，所有欄位移入 `content`：
+        {'id': ..., 'content': {'title', 'description', 'summary', 'pubDate', 'provider', ...}}
+    舊版則是扁平的 `title` / `publisher` / `providerPublishTime` / `link` / `summary`。
+
+    本函式同時支援兩種格式。**這曾是一個無聲的失效**：程式只讀舊欄位，
+    在 yfinance 1.7 下永遠取不到標題，因此 `fetch_yfinance_news` 一律回傳空清單，
+    而本機因有 Google News RSS 可用而未被察覺——直到雲端的 RSS 被封鎖才暴露。
+    """
+    content = item.get("content")
+    if isinstance(content, dict):
+        title = (content.get("title") or "").strip()
+        if not title:
+            return None
+        provider = content.get("provider") or {}
+        publisher = (provider.get("displayName") if isinstance(provider, dict) else None) or "Yahoo Finance"
+        link = ""
+        for key in ("canonicalUrl", "clickThroughUrl", "previewUrl"):
+            url_obj = content.get(key)
+            if isinstance(url_obj, dict) and url_obj.get("url"):
+                link = url_obj["url"]
+                break
+            if isinstance(url_obj, str) and url_obj:
+                link = url_obj
+                break
+        snippet = (content.get("summary") or content.get("description") or title).strip()
+        pub_dt = _parse_yf_datetime(content.get("pubDate") or content.get("displayTime"))
+        return title, publisher, link, snippet, pub_dt
+
+    # 舊版扁平格式
+    title = (item.get("title") or "").strip()
+    if not title:
+        return None
+    return (
+        title,
+        item.get("publisher") or "Yahoo Finance",
+        item.get("link") or "",
+        (item.get("summary") or title).strip(),
+        _parse_yf_datetime(item.get("providerPublishTime")),
+    )
+
+
 class NewsService:
     """
     財經新聞檢索服務 (提供 RAG 所需之近 3 日新聞文本)
     整合 yfinance 內建新聞與 Google News RSS，具備去重、日期篩選與防呆機制
+
+    兩個來源的可用性差異（2026-09-22 實測）：
+    * **Google News RSS**：本機可用，但從 Cloud Run 一律回 HTTP 503——
+      機房 IP 遭封鎖。因此雲端不可依賴此來源。
+    * **yfinance**：本機與 Cloud Run 皆可用（行情與新聞同一通道）。
     """
 
     def __init__(self, timeout_seconds: float = 10.0):
@@ -53,25 +120,22 @@ class NewsService:
             cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=3)).timestamp()
 
             for item in news_list:
-                # yfinance news schema can have title, publisher, providerPublishTime, link, etc.
-                pub_time = item.get("providerPublishTime", 0)
-                if pub_time and pub_time < cutoff_ts:
-                    continue  # 超過 3 日
+                fields = _normalize_yf_news_item(item)
+                if not fields:
+                    continue
 
-                title = item.get("title", "")
-                publisher = item.get("publisher", "Yahoo Finance")
-                link = item.get("link", "")
-                snippet = item.get("summary", "") or title
+                title, publisher, link, snippet, pub_dt = fields
+                # 超過 3 日者略過；取不到時間者保留（寧可多給 LLM 一點素材）
+                if pub_dt and pub_dt.timestamp() < cutoff_ts:
+                    continue
 
-                if title:
-                    dt_str = datetime.fromtimestamp(pub_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M") if pub_time else ""
-                    items.append(NewsItem(
-                        title=title,
-                        publisher=publisher,
-                        published_at=dt_str,
-                        link=link,
-                        snippet=snippet
-                    ))
+                items.append(NewsItem(
+                    title=title,
+                    publisher=publisher,
+                    published_at=pub_dt.strftime("%Y-%m-%d %H:%M") if pub_dt else "",
+                    link=link,
+                    snippet=snippet,
+                ))
         except Exception as e:
             logger.warning(f"[NewsService] yfinance news fetch failed for {ticker}: {e}")
 
@@ -96,6 +160,15 @@ class NewsService:
             }
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.get(base_url, params=params, headers=headers)
+                if resp.status_code >= 500:
+                    # 原本直接 return，使 @with_async_retry 形同虛設。5xx 多為暫時性，
+                    # 拋出才會觸發重試。（註：從 Cloud Run 發出的請求會穩定收到 503，
+                    # 屬機房 IP 封鎖，重試無用，此時改由 yfinance 來源承擔。）
+                    raise httpx.HTTPStatusError(
+                        f"Google News RSS 回傳 {resp.status_code}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 if resp.status_code != 200:
                     logger.warning(f"[NewsService] Google News RSS returned HTTP {resp.status_code} for query: {query}")
                     return items
@@ -123,6 +196,9 @@ class NewsService:
                         link=link,
                         snippet=desc or title
                     ))
+        except httpx.HTTPStatusError:
+            # 5xx 需往上拋才會觸發 @with_async_retry；若在此吞掉，重試裝飾器形同虛設。
+            raise
         except Exception as e:
             logger.warning(f"[NewsService] Google News RSS fetch failed for {query}: {e}")
 
@@ -143,8 +219,17 @@ class NewsService:
         news_items: List[NewsItem] = []
 
         # 1. 抓取 Google News RSS
-        rss_items = await self.fetch_google_news_rss(ticker, company_name)
-        news_items.extend(rss_items)
+        #    必須攔下例外：5xx 會在重試耗盡後往上拋（見 fetch_google_news_rss），
+        #    若不攔，單一來源失敗就會讓整個買入掃描崩潰。從 Cloud Run 發出的請求
+        #    會穩定收到 503（機房 IP 封鎖），故此降級路徑是常態而非例外。
+        try:
+            rss_items = await self.fetch_google_news_rss(ticker, company_name)
+            news_items.extend(rss_items)
+        except Exception as e:
+            logger.warning(
+                f"[NewsService] Google News RSS 不可用（{type(e).__name__}），"
+                f"改以 yfinance 來源繼續：{ticker}"
+            )
 
         # 2. 抓取 yfinance 新聞補足 (使用 to_thread 與逾時保護，避免阻塞事件迴圈)
         try:
