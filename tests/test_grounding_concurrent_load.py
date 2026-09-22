@@ -7,10 +7,12 @@ fail-open 跳過驗證——生產環境的實際症狀是冷啟動後前幾檔�
 「未驗證（模型未就緒）」。
 """
 
+import logging
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
+from app.core.config import settings
 from app.services.grounding_verifier import GroundingVerifier
 
 
@@ -93,6 +95,43 @@ def test_warmup_loads_model_ahead_of_verify():
         # 已就緒，後續呼叫不再載入
         assert v._ensure_loaded() is True
         assert len(calls) == 1
+
+
+def test_missing_weights_warns_when_layer_is_enabled(monkeypatch, caplog):
+    """啟用本層卻沒有權重時必須是 WARNING。
+
+    這正是本層長期靜默停用卻沒被發現的原因：只寫 INFO，巡檢慣用的
+    `severity>=WARNING` 查詢完全撈不到。
+    """
+    monkeypatch.setattr(settings, "GROUNDING_MODE", "annotate")
+    v = GroundingVerifier(
+        model_path="does/not/exist.onnx",
+        tokenizer_path="nope.json",
+        label_order="entailment,neutral,contradiction",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="investment_assistant"):
+        assert v.warmup() is False
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "啟用本層卻缺權重，卻沒有任何 WARNING"
+    assert "模型檔不存在" in warnings[0].message
+    assert "annotate" in warnings[0].message
+
+
+def test_missing_weights_stays_info_when_layer_is_off(monkeypatch, caplog):
+    """刻意關閉時權重缺失屬預期，不應污染 WARNING 等級。"""
+    monkeypatch.setattr(settings, "GROUNDING_MODE", "off")
+    v = GroundingVerifier(
+        model_path="does/not/exist.onnx",
+        tokenizer_path="nope.json",
+        label_order="entailment,neutral,contradiction",
+    )
+
+    with caplog.at_level(logging.INFO, logger="investment_assistant"):
+        assert v.warmup() is False
+
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 def test_warmup_on_missing_model_is_harmless():

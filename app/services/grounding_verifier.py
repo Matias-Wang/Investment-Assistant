@@ -162,6 +162,11 @@ class GroundingVerifier:
         """
         return self._ensure_loaded()
 
+    @staticmethod
+    def _mode_is_off() -> bool:
+        """本層是否被刻意關閉。關閉時權重缺失屬預期，不必提高日誌等級。"""
+        return (settings.GROUNDING_MODE or "").strip().lower() == "off"
+
     def _load(self) -> bool:
         if "entailment" not in self.label_order:
             self._load_error = f"GROUNDING_LABEL_ORDER 未包含 entailment：{self.label_order}"
@@ -171,7 +176,18 @@ class GroundingVerifier:
         model_file, tok_file = Path(self.model_path), Path(self.tokenizer_path)
         if not model_file.exists() or not tok_file.exists():
             self._load_error = f"模型檔不存在（{self.model_path} / {self.tokenizer_path}）"
-            logger.info(f"[Grounding] {self._load_error}，驗證層停用")
+            # `GROUNDING_MODE` 不是 off 就表示有人刻意要求這層運作，此時權重缺失是
+            # 設定錯誤，而非預期的停用。2026-09-22 之前這裡只寫 INFO，導致本層因
+            # 缺少 .gcloudignore 而從未真正執行過，卻很久都沒被任何人發現——
+            # 巡檢慣用的 `severity>=WARNING` 查詢完全撈不到它。
+            if self._mode_is_off():
+                logger.info(f"[Grounding] {self._load_error}，驗證層停用")
+            else:
+                logger.warning(
+                    f"[Grounding] {self._load_error}；"
+                    f"GROUNDING_MODE={settings.GROUNDING_MODE} 卻無權重可用，"
+                    f"本層將 fail-open 放行所有理由（等同未啟用）"
+                )
             return False
 
         try:
