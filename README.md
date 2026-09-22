@@ -133,7 +133,7 @@ DB_BACKEND=json
 JSON_DATA_PATH=data/assets.json
 
 GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash-lite
 
 LINE_CHANNEL_SECRET=your_line_secret
 LINE_CHANNEL_ACCESS_TOKEN=your_line_access_token
@@ -178,17 +178,71 @@ docker build -t investment-assistant:latest .
 docker run -p 8080:8080 --env-file .env investment-assistant:latest
 ```
 
-### 2. 部署至 GCP Cloud Run
+### 2. 前置資源（首次部署或換專案時才需要）
+
 ```bash
-# 1. 提交至 Google Artifact Registry
+gcloud config set project [PROJECT-ID]
+gcloud billing projects link [PROJECT-ID] --billing-account=[ACCOUNT-ID]
+gcloud services enable run.googleapis.com firestore.googleapis.com \
+  cloudscheduler.googleapis.com cloudtasks.googleapis.com cloudbuild.googleapis.com \
+  secretmanager.googleapis.com artifactregistry.googleapis.com
+gcloud firestore databases create --location=asia-east1
+gcloud tasks queues create investment-jobs --location=asia-east1
+
+for S in gemini-api-key line-channel-secret line-channel-access-token admin-api-key; do
+  gcloud secrets create "$S" --replication-policy=automatic
+  gcloud secrets add-iam-policy-binding "$S" \
+    --member="serviceAccount:[PROJECT-NUMBER]-compute@developer.gserviceaccount.com" \
+    --role=roles/secretmanager.secretAccessor
+done
+python scripts/push_secrets.py         # 先預覽（只顯示指紋，不顯示金鑰值）
+python scripts/push_secrets.py --yes   # 確認無誤後才真正寫入
+```
+
+| 漏掉哪一項 | 症狀 |
+| :--- | :--- |
+| 連結帳單帳戶 | 服務無法啟用，`FAILED_PRECONDITION: Billing account ... is not found` |
+| 四個 Secret | 容器起不來（`APP_ENV=production` 會檢查四把金鑰，缺一即拒絕啟動） |
+| Secret 讀取權 | revision 建立失敗，`Permission denied on secret ... for Revision service account` |
+| Cloud Tasks 佇列 | 耗時工作退回本地背景執行，在 Cloud Run 上會被 CPU 節流而跑不完 |
+
+灌完 Secret 後以 `python scripts/check_secret_sync.py` 確認本機與雲端一致（只顯示指紋，不顯示金鑰值）。
+
+### 3. 部署至 GCP Cloud Run
+
+```bash
+# 1. 產生非機密環境變數檔，再提交建置
+python scripts/gen_env_yaml.py
 gcloud builds submit --tag gcr.io/[PROJECT-ID]/investment-assistant
 
-# 2. 部署至 Cloud Run (開放外部存取以接收 LINE Webhook)
+# 2. 部署（金鑰一律走 Secret Manager，不得用 --set-env-vars 傳遞）
 gcloud run deploy investment-assistant \
   --image gcr.io/[PROJECT-ID]/investment-assistant \
-  --platform managed \
-  --region asia-east1 \
-  --allow-unauthenticated \
-  --set-env-vars DB_BACKEND=firestore,GCP_PROJECT_ID=[PROJECT-ID],GEMINI_API_KEY=[KEY],LINE_CHANNEL_SECRET=[SECRET],LINE_CHANNEL_ACCESS_TOKEN=[TOKEN]
+  --platform managed --region asia-east1 --allow-unauthenticated \
+  --env-vars-file .env.yaml \
+  --set-secrets "GEMINI_API_KEY=gemini-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest,ADMIN_API_KEY=admin-api-key:latest" \
+  --memory 2Gi --cpu 1 --timeout 600 --min-instances 0 --max-instances 2
+
+# 3. 把服務網址填回去（最容易漏掉）
+URL=$(gcloud run services describe investment-assistant --region asia-east1 --format "value(status.url)")
+gcloud run services update investment-assistant --region asia-east1 --update-env-vars "SERVICE_BASE_URL=$URL"
 ```
-部署完成後，將 Cloud Run 產生的 HTTPS 網址（例如：`https://investment-assistant-xxxx.a.run.app/callback`）填入 LINE Developers Console 中的 Webhook URL，並開啟 Use Webhook 即可！
+
+> PowerShell 使用者請把行尾的 `\` 換成反引號、`$(...)` 換成直接指派。
+
+`ALLOWED_LINE_USER_IDS`、`TASK_QUEUE_NAME`、`TASK_QUEUE_LOCATION` 三項需**併入 `.env.yaml`**
+——`--env-vars-file` 與 `--set-env-vars` 互斥，同時給會直接報錯。
+
+最後將 `$URL/callback` 填入 LINE Developers Console 的 Webhook URL 並開啟 Use Webhook。
+
+### 4. 四個不做就會出事、但症狀不明顯的點
+
+| 設定 | 為什麼不能省 |
+| :--- | :--- |
+| `--memory 2Gi` | 買入掃描載入 NLI 模型時峰值超過 1GB。實測 1Gi 會 `Memory limit of 1024 MiB exceeded with 1091 MiB used`，容器在掃描中被殺 |
+| `SERVICE_BASE_URL` | 漏掉則耗時工作退回本地背景執行，在 Cloud Run 上被 CPU 節流。**不會報錯**，只是 LINE 回了「掃描中」之後永遠沒有下文 |
+| `ALLOWED_LINE_USER_IDS` | fail-closed 設計：留空則所有使用者都被拒絕，包含你自己 |
+| `.gcloudignore` | 缺少時 `gcloud builds submit` 會改用 `.gitignore` 當忽略清單，而後者刻意排除 `models/` 下的權重，導致幻覺驗證層靜默 fail-open。詳見該檔註解 |
+
+金鑰**不要**用 `--set-env-vars` 傳遞：那會讓明文留在 revision 設定與 shell 歷史中。
+一律經由 Secret Manager 以 `--set-secrets` 掛載。
