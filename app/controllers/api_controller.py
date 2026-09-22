@@ -105,16 +105,29 @@ async def trigger_sell_check(
     # （且它是 truthy），FastAPI 對非路徑的純量參數本來就會視為查詢參數。
     push: bool = False,
     user_id: Optional[str] = None,
+    notify_empty: bool = True,
 ):
     """觸發賣出監控掃描 (Rule Engine)。
 
     同步完成後才回應，故可安全地由 Cloud Scheduler 或 Cloud Tasks 呼叫——
     Cloud Run 在請求處理期間會持續分配 CPU。
+
+    `notify_empty`：無警示時是否也推播一則「未觸發」通知。
+    使用者在 LINE 手動輸入「賣出檢查」時需要（預設 True），否則只看到「檢查中」
+    後一片安靜，與故障無法區分；但每 30 分鐘一次的排程應帶 `notify_empty=false`,
+    只在真的該賣時才出聲，不然一天會收到十幾則「沒事」。
     """
     sell_engine = request.app.state.sell_engine
     alerts = await sell_engine.scan_portfolio()
     line_service = getattr(request.app.state, "line_service", None)
     if push and line_service:
+        if not alerts and notify_empty:
+            # 無警示時也要回報，否則使用者只看到「檢查中」後一片安靜，
+            # 與 Cloud Tasks／SERVICE_BASE_URL 沒生效的故障狀況無法區分。
+            await line_service.push_text(
+                "✅ 賣出檢查完成：目前持股均未觸發停利或停損條件。",
+                target_user_id=user_id,
+            )
         for alert in alerts:
             await line_service.push_sell_alert(alert, target_user_id=user_id)
     return alerts
@@ -136,11 +149,9 @@ async def trigger_buy_scan(
     line_service = getattr(request.app.state, "line_service", None)
     if push and line_service:
         if not results:
-            from linebot.v3.messaging import TextMessage
-            target = user_id or None
-            line_service.push_message(
-                target or settings.LINE_USER_ID,
-                [TextMessage(text="ℹ️ 今日掃描完成：目前觀察名單中尚無同時符合 20MA 與 AI 買入評級之標的。")],
+            await line_service.push_text(
+                "ℹ️ 今日掃描完成：目前觀察名單中尚無同時符合 20MA 與 AI 買入評級之標的。",
+                target_user_id=user_id,
             )
         for rec, candidate in results:
             await line_service.push_buy_recommendation(rec, candidate, target_user_id=user_id)

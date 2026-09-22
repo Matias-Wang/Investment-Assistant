@@ -1,0 +1,43 @@
+# 控制 `gcloud builds submit` 上傳到 Cloud Build 的內容。
+#
+# ⚠️ 這個檔案的存在本身就是重點：缺少它時，gcloud 會改用 .gitignore 當忽略清單，
+# 而 .gitignore 排除了 models/**/*.onnx 與 models/**/tokenizer.json（它們是
+# 338MB 二進位檔，刻意不進 git）。結果 NLI 模型根本不會上傳，映像內沒有模型，
+# 幻覺驗證層就會 fail-open 靜默停用——服務照常運作，但防幻覺那層是關著的。
+#
+# 因此這裡**刻意不排除 models/**。映像層的過濾交給 .dockerignore 負責。
+
+# Secrets — 絕不上傳（Cloud Build 的 source 會留在 GCS bucket）
+.env
+.env.*
+!.env.example
+.env.yaml
+
+# 本機環境與快取
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 版本控制與本機資料
+.git/
+.gitignore
+data/
+eval/
+
+# 本機文件與 Claude Code 設定（映像也不需要）
+.claude/
+*.md
+!models/nli/README.md
+slm/
+
+# OS Artifacts
+.DS_Store
+Thumbs.db
+*.log

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -127,15 +128,41 @@ class GroundingVerifier:
         self._tokenizer = None
         self._load_error: Optional[str] = None
         self._loaded = False
+        # `verify` 由 BuyStrategyEngine 以 asyncio.to_thread 呼叫，且買入掃描的
+        # 併發度預設為 3，故載入必然是多執行緒競爭的。沒有鎖時第一個執行緒還在
+        # 載入（約 7 秒），後續執行緒就會看到「已載入」但 session 仍是 None，
+        # 於是 fail-open 跳過驗證。
+        self._load_lock = threading.Lock()
 
     # --- 模型載入 ---------------------------------------------------------
 
     def _ensure_loaded(self) -> bool:
-        """載入模型與 tokenizer；失敗時記錄原因並回傳 False（不拋出）。"""
+        """載入模型與 tokenizer；失敗時記錄原因並回傳 False（不拋出）。
+
+        併發呼叫時只有第一個執行緒真正載入，其餘在鎖上等待後共用結果，
+        不會因為「還在載入中」而被誤判為模型不可用。
+        """
         if self._loaded:
             return self._session is not None
-        self._loaded = True
 
+        with self._load_lock:
+            # 雙重檢查：等鎖期間可能已由其他執行緒載入完畢
+            if self._loaded:
+                return self._session is not None
+            ok = self._load()
+            # 只有在載入嘗試真正結束後才標記，否則等於對其他執行緒說謊
+            self._loaded = True
+            return ok
+
+    def warmup(self) -> bool:
+        """提早載入模型。
+
+        `min-instances 0` 下每次排程掃描都是冷啟動，若等到掃描時才載入，
+        併發分析的前幾檔會在模型就緒前跑完。於啟動時先喚醒可避開這段空窗。
+        """
+        return self._ensure_loaded()
+
+    def _load(self) -> bool:
         if "entailment" not in self.label_order:
             self._load_error = f"GROUNDING_LABEL_ORDER 未包含 entailment：{self.label_order}"
             logger.warning(f"[Grounding] {self._load_error}")

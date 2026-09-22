@@ -138,6 +138,22 @@ class LineBotService:
         except RuntimeError:
             self._send_push_sync(to_user_id, messages)
 
+    async def push_text(self, text: str, target_user_id: Optional[str] = None) -> None:
+        """推播純文字訊息，並**等待送出完成**才返回。
+
+        與 `push_message` 的差異：後者以 `loop.create_task` 射後不理，若呼叫端
+        緊接著就回應 HTTP 請求，Cloud Run 在「僅於處理請求時分配 CPU」模式下
+        會節流背景工作，該推播可能永遠送不出去。掃描「無結果」的通知正是這種
+        情境（沒有後續工作可拖住請求），故此處改為 await。
+        """
+        uid = target_user_id or settings.LINE_USER_ID
+        if not self.channel_token or not uid:
+            logger.warning("[LineBotService] Missing token or to_user_id for push text.")
+            return
+
+        messages = self._attach_quick_reply([TextMessage(text=text)])
+        await asyncio.to_thread(self._send_push_sync, uid, messages)
+
     async def push_buy_recommendation(
         self, rec: BuyRecommendation, candidate: BuyCandidate, target_user_id: Optional[str] = None
     ) -> None:

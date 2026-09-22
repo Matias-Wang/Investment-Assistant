@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -89,6 +90,15 @@ async def lifespan(app: FastAPI):
 
     # 3. 啟動排程
     scheduler_service.start()
+
+    # 4. 提早喚醒幻覺驗證模型（不阻塞啟動）
+    #    min-instances 0 下每次排程掃描都是冷啟動。若等到 13:00 掃描時才載入模型，
+    #    併發分析的前幾檔會在模型就緒前就跑完（fail-open 跳過驗證）。此處改為啟動後
+    #    立即在背景執行緒載入，讓模型在掃描真正開始前就備妥。
+    #    刻意不 await：載入約 7 秒，掛在啟動路徑上會拖慢冷啟動與 LINE 首則回覆。
+    if (settings.GROUNDING_MODE or "").strip().lower() != "off":
+        asyncio.create_task(asyncio.to_thread(buy_engine.grounding_verifier.warmup))
+
     logger.info("Investment Assistant application started successfully.")
 
     yield
