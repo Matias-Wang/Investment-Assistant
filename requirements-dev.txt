@@ -1,0 +1,8 @@
+# 本機開發／測試專用依賴，不進生產映像（Dockerfile 只安裝 requirements.txt）
+# 安裝：pip install -r requirements-dev.txt
+-r requirements.txt
+
+# 本地 LINE 端到端模擬器 scripts/test_ui.py
+# 需要 st.fragment(run_every=...) 與 st.container(key=...) 產生的 .st-key-* 樣式類別；
+# 下限取實際驗證過的版本
+streamlit>=1.64.0

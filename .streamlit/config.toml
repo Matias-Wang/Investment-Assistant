@@ -1,0 +1,8 @@
+# 本地 LINE 模擬器 (scripts/test_ui.py) 僅供本機使用。
+# Streamlit 預設監聽所有網卡，同網段的人即可用本機金鑰觸發 Gemini 並看到 Log 與模擬持股。
+[server]
+address = "127.0.0.1"
+headless = true
+
+[browser]
+gatherUsageStats = false

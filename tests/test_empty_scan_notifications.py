@@ -8,13 +8,16 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from app.controllers.api_controller import trigger_sell_check, trigger_buy_scan
-from app.models.domain import SellAlert
+from app.models.domain import CooldownPosition, SellAlert, SellScanResult, SystemConfig
 from app.services.line_bot_service import LineBotService
 
 
-def _make_request(sell_alerts=None, buy_results=None):
+def _make_request(sell_alerts=None, buy_results=None, cooling_down=None):
     request = MagicMock()
-    request.app.state.sell_engine.scan_portfolio = AsyncMock(return_value=sell_alerts or [])
+    request.app.state.sell_engine.scan_portfolio_detailed = AsyncMock(
+        return_value=SellScanResult(alerts=sell_alerts or [], cooling_down=cooling_down or [])
+    )
+    request.app.state.config_repo.get_config = AsyncMock(return_value=SystemConfig())
     request.app.state.buy_engine.scan_candidates = AsyncMock(return_value=buy_results or [])
     line_service = MagicMock()
     line_service.push_text = AsyncMock()
@@ -51,6 +54,23 @@ async def test_sell_check_no_alerts_pushes_notice():
     line_service.push_text.assert_awaited_once()
     assert line_service.push_text.await_args.kwargs["target_user_id"] == "U_test"
     line_service.push_sell_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sell_check_cooldown_is_not_reported_as_safe():
+    """有部位仍符合停損但在冷卻中時，不可回報「未觸發」，必須點名該部位。"""
+    cooling = CooldownPosition(
+        ticker="2603", name="長榮", alert_type="STOP_LOSS",
+        pnl_rate=-0.6963, last_alert_at="2026-09-28T06:05:00+00:00",
+    )
+    request, line_service = _make_request(sell_alerts=[], cooling_down=[cooling])
+
+    await trigger_sell_check(request, push=True, user_id="U_test")
+
+    text = line_service.push_text.await_args.args[0]
+    assert "未觸發" not in text and "安全" not in text
+    assert "2603 長榮 -69.63%" in text
+    assert "停損" in text and "14:05" in text  # 06:05 UTC = 台北 14:05
 
 
 @pytest.mark.asyncio

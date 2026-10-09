@@ -287,6 +287,8 @@ def build_portfolio_flex_message(val: PortfolioValuation, config: SystemConfig) 
     for item in display_items:
         pnl_sign = "+" if item.pnl_rate >= 0 else ""
         item_pnl_color = "#E65100" if item.pnl_rate >= 0 else "#C62828"
+        # 單一部位以原幣別顯示；非基準幣別者標明，避免與已換算的總額混淆
+        money = "US$" if item.currency.upper() == "USD" and config.currency.upper() != "USD" else "$"
 
         position_boxes.append({
             "type": "box",
@@ -309,8 +311,8 @@ def build_portfolio_flex_message(val: PortfolioValuation, config: SystemConfig) 
                     "layout": "horizontal",
                     "margin": "xs",
                     "contents": [
-                        {"type": "text", "text": f"股數: {item.shares:,.0f} | 成本: ${item.average_cost:.2f}", "size": "xs", "color": "#757575", "flex": 4},
-                        {"type": "text", "text": f"現價: ${item.current_price:.2f}", "size": "xs", "color": "#424242", "align": "end", "flex": 3}
+                        {"type": "text", "text": f"股數: {item.shares:,.0f} | 成本: {money}{item.average_cost:.2f}", "size": "xs", "color": "#757575", "flex": 4},
+                        {"type": "text", "text": f"現價: {money}{item.current_price:.2f}", "size": "xs", "color": "#424242", "align": "end", "flex": 3}
                     ]
                 }
             ]
@@ -369,7 +371,7 @@ def build_portfolio_flex_message(val: PortfolioValuation, config: SystemConfig) 
                     "type": "box",
                     "layout": "horizontal",
                     "contents": [
-                        {"type": "text", "text": "總建倉成本", "size": "xs", "color": "#757575"},
+                        {"type": "text", "text": f"總建倉成本 ({config.currency})", "size": "xs", "color": "#757575"},
                         {"type": "text", "text": f"${val.total_cost:,.0f}", "size": "xs", "weight": "bold", "color": "#212121", "align": "end"}
                     ]
                 },
@@ -378,7 +380,7 @@ def build_portfolio_flex_message(val: PortfolioValuation, config: SystemConfig) 
                     "layout": "horizontal",
                     "margin": "xs",
                     "contents": [
-                        {"type": "text", "text": "總現行市值", "size": "xs", "color": "#757575"},
+                        {"type": "text", "text": f"總現行市值 ({config.currency})", "size": "xs", "color": "#757575"},
                         {"type": "text", "text": f"${val.total_market_value:,.0f}", "size": "xs", "weight": "bold", "color": "#212121", "align": "end"}
                     ]
                 },

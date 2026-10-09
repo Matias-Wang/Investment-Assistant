@@ -64,7 +64,8 @@ class PortfolioRepository(ABC):
     @abstractmethod
     async def record_sell(self, ticker: str, shares: float) -> Optional[PortfolioItem]:
         """
-        記錄賣出：扣減股數；若股數歸零或不足則更新 status 為 'sold'
+        記錄賣出：扣減股數；若股數歸零或不足則更新 status 為 'sold'。
+        標的不存在或目前未持有（已賣光）時回傳 None，且不寫入任何變更。
         """
         pass
 

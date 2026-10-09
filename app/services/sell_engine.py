@@ -2,10 +2,71 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple
-from app.models.domain import PortfolioItem, SellAlert, PositionValuation, PortfolioValuation, SystemConfig
+from zoneinfo import ZoneInfo
+from app.models.domain import (
+    PortfolioItem,
+    SellAlert,
+    PositionValuation,
+    PortfolioValuation,
+    SystemConfig,
+    CooldownPosition,
+    SellScanResult,
+)
 from app.repositories.base import PortfolioRepository, ConfigRepository
 from app.services.market_service import MarketService
+from app.core.config import settings
 from app.core.logging import logger
+
+_ALERT_LABELS = {"TAKE_PROFIT": "停利", "PROFIT_ALERT": "漲幅通知", "STOP_LOSS": "停損"}
+
+
+def fx_rate_to_base(currency: str, base_currency: str) -> Optional[Decimal]:
+    """回傳 1 單位 `currency` 等於多少 `base_currency`；不支援的幣別回傳 None。
+
+    目前僅支援 TWD / USD，匯率取自 `USD_TWD_RATE`（與買入引擎換算預算時相同）。
+    改用即時匯率已列為後續優化，見 BACKLOG.md 的 B-001。
+    """
+    src = (currency or base_currency).upper()
+    dst = base_currency.upper()
+    if src == dst:
+        return Decimal("1")
+    rate = Decimal(str(settings.USD_TWD_RATE))
+    if rate <= 0:
+        return None
+    if (src, dst) == ("USD", "TWD"):
+        return rate
+    if (src, dst) == ("TWD", "USD"):
+        return Decimal("1") / rate
+    return None
+
+
+def build_no_alert_notice(result: SellScanResult, config: SystemConfig) -> str:
+    """賣出檢查沒有新警示時回報給使用者的訊息。
+
+    有部位在冷卻中時必須明講，不可說成「皆在安全範圍內」：
+    該部位其實仍符合停損／停利條件，只是 6 小時內已通知過。
+    """
+    if not result.cooling_down:
+        return (
+            "✅ 賣出檢查完成：目前持股均未觸發停利 "
+            f"(≥{config.take_profit_min * 100:.0f}%)、漲幅通知 (≥{config.profit_alert_threshold * 100:.0f}%) "
+            f"或停損 (≤{config.stop_loss * 100:.0f}%) 條件。"
+        )
+
+    tz = ZoneInfo("Asia/Taipei")
+    lines = []
+    for pos in result.cooling_down:
+        try:
+            notified = datetime.fromisoformat(pos.last_alert_at).astimezone(tz).strftime("%H:%M")
+        except ValueError:
+            notified = "稍早"
+        label = _ALERT_LABELS.get(pos.alert_type, pos.alert_type)
+        lines.append(f"• {pos.ticker} {pos.name} {pos.pnl_rate * 100:+.2f}%（{label}，{notified} 已通知）")
+    return (
+        "✅ 賣出檢查完成：沒有新的警示。\n\n"
+        f"⏳ 以下 {len(result.cooling_down)} 筆部位仍符合警示條件，但 6 小時內已通知過，冷卻期間不重複推播：\n"
+        + "\n".join(lines)
+    )
 
 
 class SellMonitoringEngine:
@@ -31,11 +92,20 @@ class SellMonitoringEngine:
         """
         排程掃描持股庫存，檢查是否有符合停利或停損條件的部位
         """
+        return (await self.scan_portfolio_detailed()).alerts
+
+    async def scan_portfolio_detailed(self) -> SellScanResult:
+        """同 `scan_portfolio`，另外回報因冷卻而未重複推播的部位。
+
+        需要對使用者回報「沒有警示」時必須用這個版本，否則冷卻中的部位
+        會被說成「皆在安全範圍內」。
+        """
         logger.info("[SellEngine] Starting scheduled portfolio scan for sell rules...")
         config: SystemConfig = await self.config_repo.get_config()
         holdings: List[PortfolioItem] = await self.portfolio_repo.get_all(status="holding")
 
         alerts: List[SellAlert] = []
+        cooling_down: List[CooldownPosition] = []
         now = datetime.now(timezone.utc)
 
         def _in_cooldown(item: PortfolioItem, alert_type: str) -> bool:
@@ -48,6 +118,18 @@ class SellMonitoringEngine:
             except Exception:
                 return False
             return False
+
+        def _record_cooldown(item: PortfolioItem, alert_type: str, pnl_rate: float) -> None:
+            logger.info(f"[SellEngine] {item.ticker}: {alert_type} alert is within 6-hour cooldown, skipping duplicate push.")
+            cooling_down.append(
+                CooldownPosition(
+                    ticker=item.ticker,
+                    name=item.name,
+                    alert_type=alert_type,
+                    pnl_rate=round(pnl_rate, 4),
+                    last_alert_at=item.last_alert_at,
+                )
+            )
 
         for item in holdings:
             if item.shares <= 0 or item.average_cost <= 0:
@@ -69,7 +151,7 @@ class SellMonitoringEngine:
             # 停利條件判斷：高於或等於 take_profit_min (消除超過上限之告警空窗)
             if pnl_rate >= config.take_profit_min:
                 if _in_cooldown(item, "TAKE_PROFIT"):
-                    logger.info(f"[SellEngine] {item.ticker}: TAKE_PROFIT alert is within 6-hour cooldown, skipping duplicate push.")
+                    _record_cooldown(item, "TAKE_PROFIT", pnl_rate)
                 else:
                     if pnl_rate <= config.take_profit_max:
                         trigger_reason = (
@@ -106,7 +188,7 @@ class SellMonitoringEngine:
             # 漲幅通知判斷：未實現損益率高於或等於 profit_alert_threshold (預設 5%)
             elif pnl_rate >= config.profit_alert_threshold:
                 if _in_cooldown(item, "PROFIT_ALERT"):
-                    logger.info(f"[SellEngine] {item.ticker}: PROFIT_ALERT alert is within 6-hour cooldown, skipping duplicate push.")
+                    _record_cooldown(item, "PROFIT_ALERT", pnl_rate)
                 else:
                     trigger_reason = (
                         f"未實現損益率 {pnl_rate * 100:+.2f}%，已突破漲幅通知門檻 "
@@ -137,7 +219,7 @@ class SellMonitoringEngine:
             # 停損條件判斷：低於 stop_loss 門檻
             elif pnl_rate <= config.stop_loss:
                 if _in_cooldown(item, "STOP_LOSS"):
-                    logger.info(f"[SellEngine] {item.ticker}: STOP_LOSS alert is within 6-hour cooldown, skipping duplicate push.")
+                    _record_cooldown(item, "STOP_LOSS", pnl_rate)
                 else:
                     trigger_reason = (
                         f"未實現損益率 {pnl_rate * 100:+.2f}%，已跌破停損點 "
@@ -165,8 +247,11 @@ class SellMonitoringEngine:
                     except Exception as e:
                         logger.warning(f"[SellEngine] Failed to update alert cooldown for {item.ticker}: {e}")
 
-        logger.info(f"[SellEngine] Scan completed. Generated {len(alerts)} sell alert(s).")
-        return alerts
+        logger.info(
+            f"[SellEngine] Scan completed. Generated {len(alerts)} sell alert(s), "
+            f"{len(cooling_down)} position(s) in cooldown."
+        )
+        return SellScanResult(alerts=alerts, cooling_down=cooling_down)
 
     async def get_portfolio_valuation(self) -> Tuple[PortfolioValuation, SystemConfig]:
         """
@@ -193,8 +278,16 @@ class SellMonitoringEngine:
             pnl_amount = market_value - cost_basis
             pnl_rate = float((current_price - item.average_cost) / item.average_cost) if item.average_cost > 0 else 0.0
 
-            total_cost += cost_basis
-            total_market_value += market_value
+            # 單一部位維持原幣別；加總前才換算為基準幣別，否則 USD 會被當成 TWD 直接相加
+            fx = fx_rate_to_base(item.currency, config.currency)
+            if fx is None:
+                logger.warning(
+                    f"[SellEngine] {item.ticker}: cannot convert {item.currency} to {config.currency}, "
+                    f"excluded from portfolio totals."
+                )
+            else:
+                total_cost += cost_basis * fx
+                total_market_value += market_value * fx
 
             valuations.append(
                 PositionValuation(

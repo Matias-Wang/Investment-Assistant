@@ -82,6 +82,25 @@ class SellAlert(BaseModel):
     trigger_reason: str
 
 
+class CooldownPosition(BaseModel):
+    """符合警示條件、但因 6 小時冷卻而未重複推播的部位"""
+    ticker: str
+    name: str
+    alert_type: str
+    pnl_rate: float
+    last_alert_at: str
+
+
+class SellScanResult(BaseModel):
+    """賣出掃描的完整結果。
+
+    僅回傳 alerts 時，「沒有警示」與「有部位符合條件但在冷卻中」無法區分，
+    使用者會收到「皆在安全範圍內」的誤導訊息，因此冷卻中的部位一併回報。
+    """
+    alerts: List[SellAlert] = Field(default_factory=list)
+    cooling_down: List[CooldownPosition] = Field(default_factory=list)
+
+
 class BuyCandidate(BaseModel):
     """
     通過量化過濾與預算計算之候選標的

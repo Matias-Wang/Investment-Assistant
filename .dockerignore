@@ -6,16 +6,24 @@
 # 本機環境與快取
 .venv/
 venv/
-__pycache__/
-*.py[cod]
+# Docker 的規則只比對根目錄相對路徑，須加 **/ 才會擋到子目錄
+**/__pycache__/
+**/*.py[cod]
 .pytest_cache/
 
 # 本機資料與稽核結果
 data/
 eval/
+# 本機模擬器的對話紀錄、應用 Log 與隔離用資料檔（含測試者輸入內容）
+data_logs/
 
 # 開發用檔案
 tests/
+pytest.ini
+requirements-dev.txt
+.streamlit/
+# 本地 LINE 模擬器 (Streamlit)：streamlit 不在生產依賴中，打包進去也無法執行
+scripts/test_ui.py
 .git/
 .claude/
 *.md

@@ -30,6 +30,17 @@ htmlcov/
 .gitignore
 data/
 eval/
+# 本機 LINE 模擬器的對話紀錄與隔離資料檔（含測試者輸入）
+data_logs/
+
+# 本機開發專用，不需上傳 Cloud Build
+# tests/：Cloud Build 只依 Dockerfile 建映像、不跑 pytest，且 .dockerignore 本就排除 tests/；
+#         其中含 UI 測試用的虛構持股 (tests/fixtures/)，沒有理由留在 GCS bucket
+tests/
+requirements-dev.txt
+scripts/test_ui.py
+.streamlit/
+pytest.ini
 
 # 本機文件與 Claude Code 設定（映像也不需要）
 .claude/

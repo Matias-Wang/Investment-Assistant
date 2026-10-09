@@ -168,6 +168,14 @@ python scripts/send_market_report.py
 python scripts/send_market_report.py --dry-run
 ```
 
+### 6. 本地 LINE 模擬器（UI 端到端測試）
+不需手機或 ngrok，在瀏覽器模擬 LINE 對話，訊息走真實的 `/callback`，且與正式環境完全隔離：
+```bash
+pip install -r requirements-dev.txt
+streamlit run scripts/test_ui.py   # 須於專案根目錄執行
+```
+完整測試案例與預期結果見 [UI_TESTING.md](UI_TESTING.md)。
+
 ---
 
 ## 雲端部署 (Docker & GCP Cloud Run)

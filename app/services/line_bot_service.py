@@ -32,6 +32,7 @@ from app.models.slm import NLUIntent, NLUIntentResult
 from app.services.slm_service import SLMService
 from app.services.nlu_rules import RuleBasedNLU
 from app.services.task_dispatcher import TaskDispatcher
+from app.services.sell_engine import build_no_alert_notice
 from app.repositories.base import ConfigRepository, PortfolioRepository, SessionRepository
 from app.utils.flex_templates import (
     build_buy_flex_message,
@@ -290,7 +291,7 @@ class LineBotService:
                     rem_shares = updated.shares if updated.status == "holding" else 0
                     msg = f"✅ 已成功記錄手動賣出：\n標的：{ticker}\n股數：{shares:,.0f} 股\n剩餘持股：{rem_shares:,.0f} 股"
                 else:
-                    msg = f"⚠️ 找不到庫存標的 {ticker}，無法執行賣出記錄。"
+                    msg = f"⚠️ 找不到持有中的庫存標的 {ticker}（不存在或已賣光），無法執行賣出記錄。"
 
             self.reply_message(reply_token, [TextMessage(text=msg)])
             return
@@ -447,9 +448,11 @@ class LineBotService:
 
                 async def _background_sell_check():
                     try:
-                        alerts = await sell_engine.scan_portfolio()
+                        result = await sell_engine.scan_portfolio_detailed()
+                        alerts = result.alerts
                         if not alerts:
-                            self.push_message(user_id, [TextMessage(text="✅ 目前庫存部位皆在安全持有範圍內，未觸發停利 (>=10%) 或停損 (-50%) 條件。")])
+                            cfg = await self.config_repo.get_config()
+                            self.push_message(user_id, [TextMessage(text=build_no_alert_notice(result, cfg))])
                         else:
                             self.push_message(user_id, [TextMessage(text=f"🚨 賣出檢查完成，發現 {len(alerts)} 筆部位觸發警示條件，即將推播通知卡片...")])
                             for alert in alerts:
@@ -608,7 +611,7 @@ class LineBotService:
                         f"剩餘持股：{rem_shares:,.0f} 股"
                     )
                 else:
-                    msg = f"⚠️ 找不到庫存標的 {nlu_res.ticker}，無法執行賣出記錄。"
+                    msg = f"⚠️ 找不到持有中的庫存標的 {nlu_res.ticker}（不存在或已賣光），無法執行賣出記錄。"
                 self.reply_message(reply_token, [TextMessage(text=msg)])
                 return True
             elif nlu_res.ticker:
@@ -745,9 +748,11 @@ class LineBotService:
                 self.reply_message(reply_token, [TextMessage(text="🚨 已開始進行賣出風控檢查，正在獲取庫存即時報價，完成後將主動推播結果...")])
                 async def _background_sell_check():
                     try:
-                        alerts = await sell_engine.scan_portfolio()
+                        result = await sell_engine.scan_portfolio_detailed()
+                        alerts = result.alerts
                         if not alerts:
-                            self.push_message(user_id, [TextMessage(text="✅ 目前庫存部位皆在安全持有範圍內，未觸發停利 (>=10%) 或停損 (-50%) 條件。")])
+                            cfg = await self.config_repo.get_config()
+                            self.push_message(user_id, [TextMessage(text=build_no_alert_notice(result, cfg))])
                         else:
                             self.push_message(user_id, [TextMessage(text=f"🚨 賣出檢查完成，發現 {len(alerts)} 筆部位觸發警示條件，即將推播通知卡片...")])
                             for alert in alerts:
@@ -885,8 +890,12 @@ class LineBotService:
                 msg = f"🎉 成功記錄買入！\n標的：{ticker}\n價格：${price:.2f}\n股數：{shares:,.0f} 股\n已成功加入庫存狀態表。"
             elif session.awaiting_action == "CONFIRM_SELL":
                 updated = await self.portfolio_repo.record_sell(ticker=ticker, shares=shares)
-                rem_shares = updated.shares if updated and updated.status == "holding" else 0
-                msg = f"🎉 成功記錄賣出！\n標的：{ticker}\n已扣減 {shares:,.0f} 股 (剩餘持股：{rem_shares:,.0f} 股)。"
+                if updated:
+                    rem_shares = updated.shares if updated.status == "holding" else 0
+                    msg = f"🎉 成功記錄賣出！\n標的：{ticker}\n已扣減 {shares:,.0f} 股 (剩餘持股：{rem_shares:,.0f} 股)。"
+                else:
+                    # 例如按了舊卡片的按鈕，而該標的早已賣光：不可回報成功
+                    msg = f"⚠️ 找不到持有中的庫存標的 {ticker}（不存在或已賣光），未記錄賣出。"
             else:
                 msg = "未知的確認動作。"
 

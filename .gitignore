@@ -25,6 +25,7 @@ models/**/*.bin
 # Local Data
 data/*.tmp
 data/
+data_logs/
 
 # OS Artifacts
 .DS_Store

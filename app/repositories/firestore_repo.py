@@ -213,6 +213,11 @@ class FirestorePortfolioRepository(FirestoreBase, PortfolioRepository):
             curr_version = int(data.get("version", 1))
             now_iso = datetime.now(timezone.utc).isoformat()
 
+            # 已賣光的標的仍保留文件（status=sold），不可再被「賣出成功」
+            if data.get("status") != "holding" or current_shares <= 0:
+                logger.warning(f"[FirestorePortfolioRepository] Stock {ticker_key} is not currently held.")
+                return None
+
             if shares_dec >= current_shares:
                 data["shares"] = Decimal("0.0")
                 data["status"] = "sold"

@@ -1,0 +1,110 @@
+{
+  "system_config": {
+    "trade_budget_per_order": "50000.0",
+    "profit_alert_threshold": 0.05,
+    "take_profit_min": 0.1,
+    "take_profit_max": 0.2,
+    "stop_loss": -0.5,
+    "currency": "TWD"
+  },
+  "portfolio": [
+    {
+      "ticker": "2330",
+      "name": "台積電",
+      "asset_type": "tw_stock",
+      "shares": "20",
+      "average_cost": "2450.0000",
+      "currency": "TWD",
+      "purchase_date": "2026-08-03",
+      "last_updated": "2026-08-03T01:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "0050",
+      "name": "元大台灣50",
+      "asset_type": "tw_stock",
+      "shares": "500",
+      "average_cost": "110.0000",
+      "currency": "TWD",
+      "purchase_date": "2026-07-15",
+      "last_updated": "2026-07-15T01:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "2317",
+      "name": "鴻海",
+      "asset_type": "tw_stock",
+      "shares": "200",
+      "average_cost": "234.0000",
+      "currency": "TWD",
+      "purchase_date": "2026-08-20",
+      "last_updated": "2026-08-20T01:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "2454",
+      "name": "聯發科",
+      "asset_type": "tw_stock",
+      "shares": "10",
+      "average_cost": "2600.0000",
+      "currency": "TWD",
+      "purchase_date": "2025-11-10",
+      "last_updated": "2025-11-10T01:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "2603",
+      "name": "長榮",
+      "asset_type": "tw_stock",
+      "shares": "100",
+      "average_cost": "800.0000",
+      "currency": "TWD",
+      "purchase_date": "2025-06-02",
+      "last_updated": "2025-06-02T01:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "AAPL",
+      "name": "Apple",
+      "asset_type": "us_stock",
+      "shares": "5",
+      "average_cost": "335.0000",
+      "currency": "USD",
+      "purchase_date": "2026-09-01",
+      "last_updated": "2026-09-01T14:30:00+00:00",
+      "status": "holding",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 1
+    },
+    {
+      "ticker": "2882",
+      "name": "國泰金",
+      "asset_type": "tw_stock",
+      "shares": "0.0",
+      "average_cost": "60.0000",
+      "currency": "TWD",
+      "purchase_date": "2026-03-12",
+      "last_updated": "2026-06-30T05:00:00+00:00",
+      "status": "sold",
+      "last_alert_type": null,
+      "last_alert_at": null,
+      "version": 3
+    }
+  ]
+}

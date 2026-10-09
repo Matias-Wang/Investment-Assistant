@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.models.domain import SystemConfig, PortfolioItem, SellAlert
 from app.models.llm import BuyRecommendation
+from app.services.sell_engine import build_no_alert_notice
 
 router = APIRouter(prefix="/api", tags=["System Management & Triggers"])
 
@@ -118,14 +119,17 @@ async def trigger_sell_check(
     只在真的該賣時才出聲，不然一天會收到十幾則「沒事」。
     """
     sell_engine = request.app.state.sell_engine
-    alerts = await sell_engine.scan_portfolio()
+    result = await sell_engine.scan_portfolio_detailed()
+    alerts = result.alerts
     line_service = getattr(request.app.state, "line_service", None)
     if push and line_service:
         if not alerts and notify_empty:
             # 無警示時也要回報，否則使用者只看到「檢查中」後一片安靜，
             # 與 Cloud Tasks／SERVICE_BASE_URL 沒生效的故障狀況無法區分。
+            # 冷卻中的部位須一併說明，不可說成「未觸發」。
+            config = await request.app.state.config_repo.get_config()
             await line_service.push_text(
-                "✅ 賣出檢查完成：目前持股均未觸發停利或停損條件。",
+                build_no_alert_notice(result, config),
                 target_user_id=user_id,
             )
         for alert in alerts:

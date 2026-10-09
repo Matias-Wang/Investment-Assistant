@@ -203,6 +203,11 @@ class JsonPortfolioRepository(JsonRepositoryBase, PortfolioRepository):
             current_shares = Decimal(str(item_data.get("shares", 0.0)))
             curr_ver = int(item_data.get("version", 1))
 
+            # 已賣光的標的仍保留紀錄（status=sold），不可再被「賣出成功」
+            if item_data.get("status") != "holding" or current_shares <= 0:
+                logger.warning(f"[JsonPortfolioRepository] Attempted to sell {ticker} which is not currently held.")
+                return None
+
             if shares_dec >= current_shares:
                 item_data["shares"] = Decimal("0.0")
                 item_data["status"] = "sold"
