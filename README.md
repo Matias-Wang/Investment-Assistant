@@ -243,9 +243,9 @@ gcloud run services update investment-assistant --region asia-east1 --update-env
 
 最後將 `$URL/callback` 填入 LINE Developers Console 的 Webhook URL 並開啟 Use Webhook。
 
-### 4. 四個不做就會出事、但症狀不明顯的點
+### 4. 其他注意事項
 
-| 設定 | 為什麼不能省 |
+| 設定 | 備註 |
 | :--- | :--- |
 | `--memory 2Gi` | 買入掃描載入 NLI 模型時峰值超過 1GB。實測 1Gi 會 `Memory limit of 1024 MiB exceeded with 1091 MiB used`，容器在掃描中被殺 |
 | `SERVICE_BASE_URL` | 漏掉則耗時工作退回本地背景執行，在 Cloud Run 上被 CPU 節流。**不會報錯**，只是 LINE 回了「掃描中」之後永遠沒有下文 |
