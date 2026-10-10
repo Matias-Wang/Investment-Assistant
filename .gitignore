@@ -12,6 +12,10 @@ __pycache__/
 *$py.class
 *.so
 
+# 相關文件
+docs/
+
+
 # Testing & Coverage
 .pytest_cache/
 .coverage
@@ -38,6 +42,8 @@ AGNETS.md
 AGENTS.md
 SLM_PLAN.md
 SLM_ROADMAP.md
+MEETING_MINUTES.md
+*MEETING*.md
 
 # Claude Code 本機設定（角色提示詞與 skill，與 CLAUDE.md 同性質，不進倉）
 .claude/
