@@ -54,7 +54,7 @@
 ### 現況
 
 * `app/repositories/firestore_repo.py`（正式環境實際使用的資料庫）**沒有任何測試**；現有測試只涵蓋 JSON 版。
-* 唯一的 Firestore 是正式環境（`YOUR_GCP_PROJECT_ID`），**不可**拿來跑測試：測試資料會寫進真實持股。
+* 唯一的 Firestore 是正式環境（`gen-lang-client-******201`），**不可**拿來跑測試：測試資料會寫進真實持股。
 * JSON 版與 Firestore 版的買賣邏輯是各寫一份，兩邊行為可能悄悄分歧，目前沒有機制發現。
 
 ### 要改成
