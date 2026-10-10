@@ -261,3 +261,78 @@ async def test_final_report_overrides_llm_computed_fields():
     assert got.market_sentiment == "空方承壓"
     assert got.date_str != "1999-01-01"
     assert got.index_summary != "LLM 亂寫" and "-2.00%" in got.index_summary
+
+
+# ---- LINE 觸發路徑 (回歸：固定指令分支曾遺失，雲端輸入「產業報告」無反應) ----------------
+
+from app.services.nlu_rules import RuleBasedNLU
+from app.models.slm import NLUIntent
+
+
+def _line_event(text, user_id="U123456"):
+    ev = MagicMock()
+    ev.reply_token = "tok"
+    ev.source.user_id = user_id
+    ev.message.text = text
+    return ev
+
+
+def _line_service():
+    cfg, pf, sess = AsyncMock(), AsyncMock(), AsyncMock()
+    sess.get_session.return_value = None
+    svc = LineBotService(cfg, pf, sess)
+    svc.reply_message = MagicMock()
+    svc.push_message = MagicMock()
+    svc.task_dispatcher = MagicMock()
+    svc.task_dispatcher.dispatch = AsyncMock()
+    return svc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["產業報告", "產業快報", "產業分析", "給我產業快報", "我的產業狀況怎麼樣"])
+async def test_line_text_triggers_industry_report_not_market(text, report, performance):
+    svc = _line_service()
+    market = AsyncMock()
+    industry = MagicMock()
+    industry.generate_industry_report = AsyncMock(return_value=(report, performance))
+    with patch("app.core.config.settings.ALLOWED_LINE_USER_IDS", ["U123456"]):
+        await svc._handle_text_message(
+            _line_event(text), {"industry_report_service": industry, "market_report_service": market}
+        )
+    job = svc.task_dispatcher.dispatch.call_args
+    assert job[0][0] == "industry-report"          # 派送的是產業報告，不是市場報告
+    assert "產業報告生成中" in svc.reply_message.call_args[0][1][0].text
+    market.generate_market_report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_line_industry_fallback_pushes_card_and_reports_no_holdings(report, performance):
+    svc = _line_service()
+    svc.push_industry_report = AsyncMock()
+    industry = MagicMock()
+    industry.generate_industry_report = AsyncMock(return_value=(report, performance))
+    with patch("app.core.config.settings.ALLOWED_LINE_USER_IDS", ["U123456"]):
+        await svc._handle_text_message(_line_event("產業報告"), {"industry_report_service": industry})
+        await svc.task_dispatcher.dispatch.call_args.kwargs["fallback"]()
+    svc.push_industry_report.assert_awaited_once_with(report, performance, target_user_id="U123456")
+
+    industry.generate_industry_report = AsyncMock(side_effect=ValueError("目前沒有持股，無法產生產業報告。"))
+    with patch("app.core.config.settings.ALLOWED_LINE_USER_IDS", ["U123456"]):
+        await svc._handle_text_message(_line_event("產業報告"), {"industry_report_service": industry})
+        await svc.task_dispatcher.dispatch.call_args.kwargs["fallback"]()
+    assert "沒有持股" in svc.push_message.call_args[0][1][0].text
+
+
+def test_market_phrases_still_route_to_market_report():
+    nlu = RuleBasedNLU()
+    assert nlu.parse("今天大盤怎樣").intent == NLUIntent.MARKET_REPORT
+    assert nlu.parse("市場快報").intent == NLUIntent.MARKET_REPORT
+    assert nlu.parse("產業快報").intent == NLUIntent.INDUSTRY_REPORT
+
+
+def test_menu_quickreply_and_help_expose_industry_report():
+    import json
+    from app.utils.flex_templates import build_menu_flex_message
+    assert "產業報告" in json.dumps(build_menu_flex_message(), ensure_ascii=False)
+    items = _line_service()._get_default_quick_reply().items
+    assert any(i.action.text == "產業報告" for i in items)

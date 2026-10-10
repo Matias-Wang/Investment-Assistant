@@ -10,6 +10,7 @@ class NLUIntent(str, Enum):
     QUERY_CONFIG = "QUERY_CONFIG"        # 查詢策略參數，如「目前設定為何」
     UPDATE_CONFIG = "UPDATE_CONFIG"      # 修改策略參數，如「把預算改成12萬」、「停損改-30%」
     MARKET_REPORT = "MARKET_REPORT"      # 今日市場快報，如「今天大盤如何」、「市場報告」
+    INDUSTRY_REPORT = "INDUSTRY_REPORT"  # 持股產業報告，如「產業報告」、「我的產業狀況」
     BUY_SCAN = "BUY_SCAN"                # 觸發買入掃描，如「有沒有推薦買進的股票」
     SELL_CHECK = "SELL_CHECK"            # 觸發賣出風控檢查，如「檢查哪些該賣了」
     MENU = "MENU"                        # 開啟選單

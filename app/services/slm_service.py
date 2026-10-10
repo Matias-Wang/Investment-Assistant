@@ -31,6 +31,7 @@ class SLMService:
 - QUERY_CONFIG: 查詢目前的系統參數、預算或停損利設定
 - UPDATE_CONFIG: 修改策略參數 (提取 config_field: 'budget' | 'take_profit' | 'stop_loss' | 'profit_alert', 與數值 config_value)
 - MARKET_REPORT: 詢問今日大盤、盤勢、市場快報或宏觀分析
+- INDUSTRY_REPORT: 詢問持股所屬產業的動態、產業報告或產業分析
 - BUY_SCAN: 要求買入建議、推薦標的、買入掃描
 - SELL_CHECK: 要求檢查庫存是否該賣、賣出檢查、風控檢查
 - MENU: 要求開啟功能選單

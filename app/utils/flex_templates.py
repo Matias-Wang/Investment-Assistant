@@ -490,6 +490,17 @@ def build_menu_flex_message() -> Dict[str, Any]:
                 },
                 {
                     "type": "button",
+                    "style": "primary",
+                    "color": "#00695C",
+                    "height": "sm",
+                    "action": {
+                        "type": "message",
+                        "label": "🏭 持股產業報告 (AI)",
+                        "text": "產業報告"
+                    }
+                },
+                {
+                    "type": "button",
                     "style": "secondary",
                     "color": "#ECEFF1",
                     "height": "sm",

@@ -216,6 +216,7 @@ PORTFOLIO_PAT = re.compile(
     r"(賺|賠|損益|庫存|持股|部位|現在多少|賺多少|賠多少|獲利多少|我的股票)"
 )
 CONFIG_QUERY_PAT = re.compile(r"(設定|參數|預算多少|停損多少|停利多少)")
+INDUSTRY_PAT = re.compile(r"(產業(報告|快報|分析|動態|趨勢|狀況|概況|怎麼樣|如何)|我的產業|持股.*產業)")
 MARKET_PAT = re.compile(r"(大盤|盤勢|盤面|行情|快報|市場報告|今天.*(盤|股市)|股市.*如何)")
 BUY_SCAN_PAT = re.compile(r"(推薦|建議買|買什麼|該買|掃描|選股|有沒有.*買)")
 SELL_CHECK_PAT = re.compile(r"(該賣|要賣|賣出檢查|風控|檢查.*賣|停損檢查)")
@@ -293,6 +294,7 @@ class RuleBasedNLU:
             (MENU_PAT, NLUIntent.MENU),
             (SELL_CHECK_PAT, NLUIntent.SELL_CHECK),
             (BUY_SCAN_PAT, NLUIntent.BUY_SCAN),
+            (INDUSTRY_PAT, NLUIntent.INDUSTRY_REPORT),  # 必須在 MARKET_PAT 之前
             (MARKET_PAT, NLUIntent.MARKET_REPORT),
             (PORTFOLIO_PAT, NLUIntent.QUERY_PORTFOLIO),
             (CONFIG_QUERY_PAT, NLUIntent.QUERY_CONFIG),

@@ -86,6 +86,7 @@ class LineBotService:
         return QuickReply(items=[
             QuickReplyItem(action=MessageAction(label="📊 查詢庫存", text="查詢庫存")),
             QuickReplyItem(action=MessageAction(label="📑 市場報告", text="市場報告")),
+            QuickReplyItem(action=MessageAction(label="🏭 產業報告", text="產業報告")),
             QuickReplyItem(action=MessageAction(label="💡 買入建議", text="買入建議")),
             QuickReplyItem(action=MessageAction(label="🚨 賣出檢查", text="賣出檢查")),
             QuickReplyItem(action=MessageAction(label="⚙️ 查詢設定", text="查詢設定")),
@@ -221,6 +222,27 @@ class LineBotService:
         flex_container = FlexContainer.from_dict(flex_dict)
         flex_msg = FlexMessage(alt_text=f"🏭 每日產業報告: {report.title}", contents=flex_container)
         self.push_message(uid, [flex_msg])
+
+    async def _trigger_industry_report(self, reply_token: str, user_id: str, engines_dict: Dict[str, Any]) -> None:
+        """產業報告觸發：固定指令與口語 NLU 共用，避免兩條路徑行為分岔。"""
+        industry_report_service = engines_dict.get("industry_report_service")
+        if not industry_report_service:
+            self.reply_message(reply_token, [TextMessage(text="⚠️ 產業報告模組正在初始化，請稍後再試。")])
+            return
+        self.reply_message(reply_token, [TextMessage(text="🏭 正在依您的持股彙整相關產業行情與新聞，產業報告生成中，請稍候...")])
+
+        async def _background_industry_report():
+            try:
+                report, performance = await industry_report_service.generate_industry_report()
+                await self.push_industry_report(report, performance, target_user_id=user_id)
+            except ValueError as e:
+                # 無持股屬於可預期情況，直接把原因告訴使用者
+                self.push_message(user_id, [TextMessage(text=f"ℹ️ {e}")])
+            except Exception as e:
+                logger.exception(f"[LineBotService] Error generating industry report: {e}")
+                self.push_message(user_id, [TextMessage(text="⚠️ 產業報告生成失敗，請稍後再試。")])
+
+        await self.task_dispatcher.dispatch("industry-report", user_id=user_id, fallback=_background_industry_report)
 
     async def dispatch_events(self, events: List[Any], engines_dict: Dict[str, Any]) -> None:
         """分派並處理 LINE 事件清單 (含事件去重與路由)"""
@@ -501,6 +523,11 @@ class LineBotService:
                 self.reply_message(reply_token, [TextMessage(text="⚠️ 市場報告模組正在初始化，請稍後再試。")])
             return
 
+        # 8b. 每日產業報告 (以持股所屬產業為主，非同步背景生成)
+        if text in ["產業報告", "產業快報", "產業分析"]:
+            await self._trigger_industry_report(reply_token, user_id, engines_dict)
+            return
+
         # 9. 功能控制面板選單
         if text in ["選單", "menu", "功能", "主選單", "快捷鍵", "控制面板"]:
             menu_dict = build_menu_flex_message()
@@ -515,6 +542,7 @@ class LineBotService:
                 "📊 查詢與分析指令：\n"
                 "• 查詢庫存 / 庫存：顯示現有持股評價與損益\n"
                 "• 市場報告：AI 彙整大盤、總經新聞與持股受惠分析\n"
+                "• 產業報告：依您的持股彙整各產業行情與新聞趨勢\n"
                 "• 買入建議：立即執行量化+新聞 RAG 策略掃描\n"
                 "• 賣出檢查：立即檢查庫存是否觸及停損利條件\n"
                 "• 查詢設定 / 設定：查看當前預算與停損利參數\n"
@@ -738,6 +766,11 @@ class LineBotService:
                         logger.exception(f"[LineBotService] Error generating market report: {e}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 市場報告生成失敗，請稍後再試。")])
                 await self.task_dispatcher.dispatch("market-report", user_id=user_id, fallback=_background_market_report)
+            return True
+
+        # 6b. 產業報告
+        if nlu_res.intent == NLUIntent.INDUSTRY_REPORT:
+            await self._trigger_industry_report(reply_token, user_id, engines_dict)
             return True
 
         # 7. 買入建議
