@@ -8,6 +8,7 @@ from app.services.sell_engine import SellMonitoringEngine
 from app.services.buy_engine import BuyStrategyEngine
 from app.services.line_bot_service import LineBotService
 from app.services.market_report_service import MarketReportService
+from app.services.industry_report_service import IndustryReportService
 
 
 class SchedulerService:
@@ -24,11 +25,13 @@ class SchedulerService:
         buy_engine: BuyStrategyEngine,
         line_service: LineBotService,
         market_report_service: Optional[MarketReportService] = None,
+        industry_report_service: Optional[IndustryReportService] = None,
     ):
         self.sell_engine = sell_engine
         self.buy_engine = buy_engine
         self.line_service = line_service
         self.market_report_service = market_report_service
+        self.industry_report_service = industry_report_service
         self.scheduler = AsyncIOScheduler()
 
     async def scheduled_sell_check(self) -> None:
@@ -63,6 +66,22 @@ class SchedulerService:
             logger.info(f"[Scheduler] Successfully pushed morning market report: {report.title}")
         except Exception as e:
             logger.error(f"[Scheduler] Error generating/pushing scheduled market report: {e}")
+
+    async def scheduled_industry_report(self) -> None:
+        """排程每日自動生成並推播持股相關產業報告 (AI 綜合分析)"""
+        logger.info("[Scheduler] Triggering scheduled industry report...")
+        if not self.industry_report_service:
+            logger.warning("[Scheduler] IndustryReportService is not configured, skipping industry report.")
+            return
+        try:
+            report, performance = await self.industry_report_service.generate_industry_report()
+            await self.line_service.push_industry_report(report, performance)
+            logger.info(f"[Scheduler] Successfully pushed industry report: {report.title}")
+        except ValueError as e:
+            # 無持股屬正常情況，不當成錯誤
+            logger.info(f"[Scheduler] Industry report skipped: {e}")
+        except Exception as e:
+            logger.error(f"[Scheduler] Error generating/pushing scheduled industry report: {e}")
 
     def start(self) -> None:
         if not settings.ENABLE_SCHEDULER:
@@ -111,6 +130,22 @@ class SchedulerService:
         )
         logger.info(
             f"[Scheduler] Registered morning market report job at {settings.MARKET_REPORT_CRON_HOUR:02d}:{settings.MARKET_REPORT_CRON_MINUTE:02d} {settings.MARKET_REPORT_CRON_DAYS} (Asia/Taipei)."
+        )
+
+        # 每日產業報告：預設台北時間 08:30 (晚市場快報 30 分鐘，避免兩份 Gemini 呼叫同時發生)
+        self.scheduler.add_job(
+            self.scheduled_industry_report,
+            trigger=CronTrigger(
+                day_of_week=settings.INDUSTRY_REPORT_CRON_DAYS,
+                hour=settings.INDUSTRY_REPORT_CRON_HOUR,
+                minute=settings.INDUSTRY_REPORT_CRON_MINUTE,
+                timezone=taipei_tz,
+            ),
+            id="daily_industry_report_job",
+            replace_existing=True,
+        )
+        logger.info(
+            f"[Scheduler] Registered industry report job at {settings.INDUSTRY_REPORT_CRON_HOUR:02d}:{settings.INDUSTRY_REPORT_CRON_MINUTE:02d} {settings.INDUSTRY_REPORT_CRON_DAYS} (Asia/Taipei)."
         )
 
         self.scheduler.start()

@@ -33,6 +33,7 @@ JOB_PATHS = {
     "buy-scan": "/api/trigger/buy-scan",
     "sell-check": "/api/trigger/sell-check",
     "market-report": "/api/trigger/market-report",
+    "industry-report": "/api/trigger/industry-report",
 }
 
 

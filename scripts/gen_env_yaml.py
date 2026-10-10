@@ -58,6 +58,7 @@ def build_yaml() -> str:
         f'NEWS_FILTER_MODE: "{settings.NEWS_FILTER_MODE}"',
         f'BUY_ANALYSIS_MAX_OUTPUT_TOKENS: "{settings.BUY_ANALYSIS_MAX_OUTPUT_TOKENS}"',
         f'MARKET_REPORT_MAX_OUTPUT_TOKENS: "{settings.MARKET_REPORT_MAX_OUTPUT_TOKENS}"',
+        f'INDUSTRY_REPORT_MAX_OUTPUT_TOKENS: "{settings.INDUSTRY_REPORT_MAX_OUTPUT_TOKENS}"',
         "",
         "# --- 幻覺驗證層 ---",
         "# 模型隨映像打包於 models/nli/；缺檔時 fail-open，不影響服務",
@@ -72,6 +73,9 @@ def build_yaml() -> str:
         f'MARKET_REPORT_CRON_HOUR: "{settings.MARKET_REPORT_CRON_HOUR}"',
         f'MARKET_REPORT_CRON_MINUTE: "{settings.MARKET_REPORT_CRON_MINUTE}"',
         f'MARKET_REPORT_CRON_DAYS: "{settings.MARKET_REPORT_CRON_DAYS}"',
+        f'INDUSTRY_REPORT_CRON_HOUR: "{settings.INDUSTRY_REPORT_CRON_HOUR}"',
+        f'INDUSTRY_REPORT_CRON_MINUTE: "{settings.INDUSTRY_REPORT_CRON_MINUTE}"',
+        f'INDUSTRY_REPORT_CRON_DAYS: "{settings.INDUSTRY_REPORT_CRON_DAYS}"',
         "",
     ]
     return "\n".join(lines)

@@ -18,6 +18,7 @@ from app.services.buy_engine import BuyStrategyEngine
 from app.services.line_bot_service import LineBotService
 from app.services.scheduler_service import SchedulerService
 from app.services.market_report_service import MarketReportService
+from app.services.industry_report_service import IndustryReportService
 from app.controllers.line_controller import router as line_router
 from app.controllers.api_controller import router as api_router
 
@@ -60,6 +61,11 @@ async def lifespan(app: FastAPI):
         news_service=news_service,
     )
 
+    industry_report_service = IndustryReportService(
+        portfolio_repo=portfolio_repo,
+        news_service=news_service,
+    )
+
     line_service = LineBotService(
         config_repo=config_repo,
         portfolio_repo=portfolio_repo,
@@ -72,6 +78,7 @@ async def lifespan(app: FastAPI):
         buy_engine=buy_engine,
         line_service=line_service,
         market_report_service=market_report_service,
+        industry_report_service=industry_report_service,
     )
 
     # 掛載至 app.state
@@ -85,6 +92,7 @@ async def lifespan(app: FastAPI):
     app.state.sell_engine = sell_engine
     app.state.buy_engine = buy_engine
     app.state.market_report_service = market_report_service
+    app.state.industry_report_service = industry_report_service
     app.state.line_service = line_service
     app.state.scheduler_service = scheduler_service
 

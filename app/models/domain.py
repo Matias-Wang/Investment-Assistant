@@ -126,6 +126,15 @@ class NewsItem(BaseModel):
     snippet: str
 
 
+class IndustryPerformance(BaseModel):
+    """
+    持股所屬產業的當日表現 (以該產業內持股漲跌幅等權平均)
+    """
+    industry: str
+    tickers: List[str] = Field(default_factory=list)
+    avg_change_percent: float = 0.0
+
+
 class MarketIndexItem(BaseModel):
     """
     市場大盤主要指數即時數據

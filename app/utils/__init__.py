@@ -4,6 +4,7 @@ from app.utils.flex_templates import (
     build_portfolio_flex_message,
     build_menu_flex_message,
     build_market_report_flex_message,
+    build_industry_report_flex_message,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "build_portfolio_flex_message",
     "build_menu_flex_message",
     "build_market_report_flex_message",
+    "build_industry_report_flex_message",
 ]

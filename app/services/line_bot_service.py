@@ -26,8 +26,8 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.retry import with_retry
 from app.models.line import UserSession
-from app.models.domain import SystemConfig, SellAlert, BuyCandidate, MarketIndexItem
-from app.models.llm import BuyRecommendation, MarketReport
+from app.models.domain import SystemConfig, SellAlert, BuyCandidate, MarketIndexItem, IndustryPerformance
+from app.models.llm import BuyRecommendation, MarketReport, IndustryReport
 from app.models.slm import NLUIntent, NLUIntentResult
 from app.services.slm_service import SLMService
 from app.services.nlu_rules import RuleBasedNLU
@@ -40,6 +40,7 @@ from app.utils.flex_templates import (
     build_portfolio_flex_message,
     build_menu_flex_message,
     build_market_report_flex_message,
+    build_industry_report_flex_message,
 )
 
 
@@ -202,6 +203,23 @@ class LineBotService:
         flex_dict = build_market_report_flex_message(report, indices)
         flex_container = FlexContainer.from_dict(flex_dict)
         flex_msg = FlexMessage(alt_text=f"📑 早安市場快報: {report.title}", contents=flex_container)
+        self.push_message(uid, [flex_msg])
+
+    async def push_industry_report(
+        self,
+        report: IndustryReport,
+        performance: List[IndustryPerformance],
+        target_user_id: Optional[str] = None,
+    ) -> None:
+        """推播每日產業報告 Flex Message"""
+        uid = target_user_id or settings.LINE_USER_ID
+        if not uid:
+            logger.warning("[LineBotService] No LINE user ID configured for industry report push.")
+            return
+
+        flex_dict = build_industry_report_flex_message(report, performance)
+        flex_container = FlexContainer.from_dict(flex_dict)
+        flex_msg = FlexMessage(alt_text=f"🏭 每日產業報告: {report.title}", contents=flex_container)
         self.push_message(uid, [flex_msg])
 
     async def dispatch_events(self, events: List[Any], engines_dict: Dict[str, Any]) -> None:

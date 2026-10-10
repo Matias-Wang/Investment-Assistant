@@ -515,6 +515,162 @@ def build_menu_flex_message() -> Dict[str, Any]:
     }
 
 
+def build_industry_report_flex_message(report: Any, performance: List[Any]) -> Dict[str, Any]:
+    """
+    建立每日產業報告 Flex Message (版面比照市場快報，指數區塊改為各產業持股表現)
+    """
+    outlook_color = {"偏多": "#C62828", "中性": "#E65100", "偏空": "#2E7D32"}  # 台股習慣紅漲綠跌
+
+    perf_boxes = []
+    for p in performance:
+        sign = "+" if p.avg_change_percent >= 0 else ""
+        color = "#C62828" if p.avg_change_percent >= 0 else "#2E7D32"
+        perf_boxes.append({
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#F1F3F4",
+            "cornerRadius": "6px",
+            "paddingAll": "6px",
+            "flex": 1,
+            "contents": [
+                {"type": "text", "text": p.industry, "size": "xxs", "color": "#666666", "align": "center", "wrap": True},
+                {"type": "text", "text": f"{sign}{p.avg_change_percent:.2f}%", "size": "xs", "weight": "bold", "color": color, "align": "center"},
+                {"type": "text", "text": " ".join(p.tickers), "size": "xxs", "color": "#999999", "align": "center", "wrap": True},
+            ]
+        })
+
+    # 每列 2 個；奇數個時補空 box，避免最後一格被撐滿整列
+    grid_rows = []
+    for i in range(0, len(perf_boxes), 2):
+        row = perf_boxes[i:i + 2]
+        if len(row) == 1:
+            row.append({"type": "box", "layout": "vertical", "flex": 1, "contents": []})
+        grid_rows.append({
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "xs",
+            "margin": "xs" if i else "none",
+            "contents": row,
+        })
+
+    pct_by_industry = {p.industry: p.avg_change_percent for p in performance}
+    section_boxes = []
+    for s in report.industries:
+        pct = pct_by_industry.get(s.industry)
+        # 展望依新聞判斷、漲跌依股價，兩者可能背離，並列顯示避免誤讀
+        price_tag = f"｜股價 {'+' if pct >= 0 else ''}{pct:.2f}%" if pct is not None else ""
+        section_boxes.append({
+            "type": "box",
+            "layout": "vertical",
+            "margin": "xs",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"▪ {s.industry}　新聞面{s.outlook}{price_tag}",
+                    "wrap": True,
+                    "size": "xs",
+                    "weight": "bold",
+                    "color": outlook_color.get(s.outlook, "#424242"),
+                },
+                {"type": "text", "text": s.summary, "size": "xs", "color": "#424242", "wrap": True},
+            ]
+        })
+
+    headline_boxes = [
+        {"type": "text", "text": f"• {h}", "size": "xs", "color": "#424242", "wrap": True, "margin": "xs"}
+        for h in report.key_headlines[:4]
+    ]
+
+    body_contents: List[Dict[str, Any]] = []
+    if grid_rows:
+        body_contents.append({"type": "box", "layout": "vertical", "contents": grid_rows})
+    body_contents.extend([
+        {"type": "text", "text": report.index_summary, "size": "xs", "color": "#555555", "wrap": True, "margin": "xs"},
+        {"type": "separator", "margin": "sm"},
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "sm",
+            "contents": [
+                {"type": "text", "text": "🏭 各產業趨勢:", "size": "xs", "weight": "bold", "color": "#00695C"}
+            ] + section_boxes
+        },
+        {"type": "separator", "margin": "sm"},
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "sm",
+            "contents": [
+                {"type": "text", "text": "🔥 今日產業關鍵焦點:", "size": "xs", "weight": "bold", "color": "#00695C"}
+            ] + headline_boxes
+        },
+        {"type": "separator", "margin": "sm"},
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "sm",
+            "backgroundColor": "#E0F2F1",
+            "paddingAll": "8px",
+            "cornerRadius": "6px",
+            "contents": [
+                {"type": "text", "text": "🎯 對您目前持股的影響評估:", "size": "xs", "weight": "bold", "color": "#004D40"},
+                {"type": "text", "text": report.portfolio_insight, "size": "xs", "color": "#424242", "wrap": True, "margin": "xs"}
+            ]
+        },
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "xs",
+            "backgroundColor": "#E8F5E9",
+            "paddingAll": "8px",
+            "cornerRadius": "6px",
+            "contents": [
+                {"type": "text", "text": "💡 今日操作與風控叮嚀:", "size": "xs", "weight": "bold", "color": "#2E7D32"},
+                {"type": "text", "text": report.actionable_takeaway, "size": "xs", "color": "#2E7D32", "wrap": True, "margin": "xs"}
+            ]
+        },
+    ])
+
+    return {
+        "type": "bubble",
+        "size": "mega",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#00695C",
+            "paddingAll": "15px",
+            "contents": [
+                {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "contents": [
+                        {"type": "text", "text": "🏭 AI 每日產業報告", "color": "#FFFFFF", "weight": "bold", "size": "md", "flex": 3},
+                        {"type": "text", "text": report.market_sentiment, "size": "xs", "color": "#FFFFFF", "weight": "bold", "align": "end", "flex": 2}
+                    ]
+                },
+                {"type": "text", "text": report.title, "color": "#B2DFDB", "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
+                {"type": "text", "text": f"生成時間：{report.date_str}", "color": "#80CBC4", "size": "xxs", "margin": "xs"}
+            ]
+        },
+        "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body_contents},
+        "footer": {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button", "style": "secondary", "height": "sm",
+                    "action": {"type": "message", "label": "📊 查詢庫存", "text": "查詢庫存"}
+                },
+                {
+                    "type": "button", "style": "primary", "color": "#00695C", "height": "sm",
+                    "action": {"type": "message", "label": "📑 市場報告", "text": "市場報告"}
+                }
+            ]
+        }
+    }
+
+
 def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[str, Any]:
     """
     建立每日市場快報 Flex Message

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # 上限需留足夠餘裕：response_schema 為 JSON，截斷會導致反序列化失敗而整筆作廢
     BUY_ANALYSIS_MAX_OUTPUT_TOKENS: int = 800
     MARKET_REPORT_MAX_OUTPUT_TOKENS: int = 1024
+    INDUSTRY_REPORT_MAX_OUTPUT_TOKENS: int = 2048
     # 選用的 thinking 上限 (thinking token 併入 output 計價)。
     # 空字串 = 不傳送此參數，沿用模型預設 (gemini-3.5-flash-lite 預設為 Off)。
     # 若改用 thinking 預設開啟的模型 (如 3.x Flash)，設為 "MINIMAL" 可避免費用暴增。
@@ -131,6 +132,9 @@ class Settings(BaseSettings):
     MARKET_REPORT_CRON_HOUR: int = 8
     MARKET_REPORT_CRON_MINUTE: int = 0
     MARKET_REPORT_CRON_DAYS: str = "mon-sun"
+    INDUSTRY_REPORT_CRON_HOUR: int = 8
+    INDUSTRY_REPORT_CRON_MINUTE: int = 30
+    INDUSTRY_REPORT_CRON_DAYS: str = "mon-sun"
 
     @field_validator("ALLOWED_LINE_USER_IDS", "CORS_ALLOWED_ORIGINS", "BUY_CANDIDATES", mode="after")
     @classmethod

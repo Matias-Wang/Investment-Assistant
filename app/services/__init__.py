@@ -6,6 +6,7 @@ from app.services.buy_engine import BuyStrategyEngine
 from app.services.line_bot_service import LineBotService
 from app.services.scheduler_service import SchedulerService
 from app.services.market_report_service import MarketReportService
+from app.services.industry_report_service import IndustryReportService
 
 __all__ = [
     "MarketService",
@@ -16,4 +17,5 @@ __all__ = [
     "LineBotService",
     "SchedulerService",
     "MarketReportService",
+    "IndustryReportService",
 ]

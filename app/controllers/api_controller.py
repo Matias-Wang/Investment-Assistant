@@ -190,3 +190,29 @@ async def trigger_market_report(
         "pushed": pushed,
     }
 
+
+@router.post("/trigger/industry-report", dependencies=[Depends(verify_admin)])
+async def trigger_industry_report(
+    request: Request,
+    push: bool = False,
+    user_id: Optional[str] = None,
+):
+    """手動或外部排程觸發每日產業報告 (依持股所屬產業)，可選是否推播至 LINE"""
+    industry_report_service = getattr(request.app.state, "industry_report_service", None)
+    line_service = getattr(request.app.state, "line_service", None)
+    if not industry_report_service:
+        raise HTTPException(status_code=503, detail="Industry report service not initialized")
+    try:
+        report, performance = await industry_report_service.generate_industry_report()
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    pushed = False
+    if push and line_service:
+        await line_service.push_industry_report(report, performance, target_user_id=user_id)
+        pushed = True
+    return {
+        "report": report.model_dump(),
+        "performance": [p.model_dump() for p in performance],
+        "pushed": pushed,
+    }
+

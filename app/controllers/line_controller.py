@@ -33,6 +33,7 @@ async def line_webhook(
         "sell_engine": request.app.state.sell_engine,
         "buy_engine": request.app.state.buy_engine,
         "market_report_service": getattr(request.app.state, "market_report_service", None),
+        "industry_report_service": getattr(request.app.state, "industry_report_service", None),
     }
 
     if not line_service.parser:
