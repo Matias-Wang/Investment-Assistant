@@ -100,6 +100,19 @@ def test_natural_sell(nlu: RuleBasedNLU):
     assert r.shares == pytest.approx(4.0)
 
 
+@pytest.mark.parametrize("text,ticker,shares,price", [
+    ("賣出2313 成交價254.5 500股", "2313", 500, 254.5),
+    ("賣出2330 1080 4股", "2330", 4, 1080),
+    ("賣出 2330 4", "2330", 4, None),
+])
+def test_sell_report_slots(nlu, text, ticker, shares, price):
+    result = nlu.parse(text)
+    assert result.intent == NLUIntent.RECORD_SELL
+    assert result.ticker == ticker
+    assert result.shares == shares
+    assert result.price == price
+
+
 def test_update_budget_in_wan(nlu: RuleBasedNLU):
     r = nlu.parse("幫我把單次預算改成 12 萬")
     assert r.intent == NLUIntent.UPDATE_CONFIG

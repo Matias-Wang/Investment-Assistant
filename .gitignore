@@ -12,7 +12,7 @@ __pycache__/
 *$py.class
 *.so
 
-# 相關文件
+# 本機專用文件（僅留於 local，不進版本控制）
 docs/
 
 

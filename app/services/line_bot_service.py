@@ -1,6 +1,7 @@
 import re
 import urllib.parse
 import asyncio
+import math
 from typing import Optional, Dict, Any, List
 from linebot.v3 import WebhookParser
 from linebot.v3.exceptions import InvalidSignatureError
@@ -53,6 +54,9 @@ class LineBotService:
     - Flex Message 推播與回覆
     - 確定性口語解析 (規則層)，並以 SLM 作為選用 fallback
     """
+
+    MAX_SESSION_PRICE = 1_000_000
+    MAX_SESSION_SHARES = 1_000_000_000
 
     def __init__(
         self,
@@ -328,8 +332,7 @@ class LineBotService:
             else:
                 updated = await self.portfolio_repo.record_sell(ticker=ticker, shares=shares)
                 if updated:
-                    rem_shares = updated.shares if updated.status == "holding" else 0
-                    msg = f"✅ 已成功記錄手動賣出：\n標的：{ticker}\n股數：{shares:,.0f} 股\n剩餘持股：{rem_shares:,.0f} 股"
+                    msg = f"✅ 已成功記錄手動賣出：\n標的：{ticker}\n{self._sell_result_text(updated, shares)}"
                 else:
                     msg = f"⚠️ 找不到持有中的庫存標的 {ticker}（不存在或已賣光），無法執行賣出記錄。"
 
@@ -555,6 +558,7 @@ class LineBotService:
                 "📝 手動更新部位：\n"
                 "• 買入 2330 1050 8 (代號 價格 股數)\n"
                 "• 賣出 2330 1080 4 (代號 價格 股數)\n"
+                "• 賣出 2330 4：省略成交價時，4 代表股數；買入仍需成交價及股數\n"
                 "• 或點擊推播卡片之「手動已買入/手動已賣出」按鈕！"
             )
             self.reply_message(reply_token, [TextMessage(text=help_text)])
@@ -649,12 +653,10 @@ class LineBotService:
                     ticker=nlu_res.ticker, shares=nlu_res.shares
                 )
                 if updated:
-                    rem_shares = updated.shares if updated.status == "holding" else 0
                     msg = (
                         f"🤖 【AI 語意記帳成功】\n"
                         f"標的：{nlu_res.ticker}\n"
-                        f"賣出股數：{nlu_res.shares:,.0f} 股\n"
-                        f"剩餘持股：{rem_shares:,.0f} 股"
+                        f"{self._sell_result_text(updated, nlu_res.shares)}"
                     )
                 else:
                     msg = f"⚠️ 找不到持有中的庫存標的 {nlu_res.ticker}（不存在或已賣光），無法執行賣出記錄。"
@@ -830,7 +832,8 @@ class LineBotService:
                 "• 「買入建議」或「有沒有推薦買進的」\n"
                 "• 「賣出檢查」或「幫我看哪些該賣了」\n"
                 "• 「買入 台積電 1050 8」或「剛在1050買入8股台積電」\n"
-                "• 「賣出 2330 4」或「賣出4股台積電」\n"
+                "• 「賣出 2330 4」（4 是股數）或「賣出4股台積電」\n"
+                "• 買入需提供成交價與股數，不能省略成單一數字\n"
                 "• 「設定預算 120000」或「把預算改成12萬」\n"
                 "• 「設定停損 -20%」或「停損改 -20%」\n"
                 "• 「選單」開啟圖文按鈕卡片"
@@ -919,7 +922,24 @@ class LineBotService:
             )
             self.reply_message(reply_token, [TextMessage(text=prompt_msg)])
 
+    @staticmethod
+    def _sell_result_text(updated, shares: float) -> str:
+        # sold 由 repository 在鎖／交易內決定，避免用交易前的快照猜測實際扣減量。
+        if updated.status == "sold":
+            return "回報股數已達或超過可用庫存，已全數賣出。\n剩餘持股：0 股"
+        return f"已扣減 {shares:,.0f} 股\n剩餘持股：{updated.shares:,.0f} 股"
+
     async def _handle_session_reply(self, event: MessageEvent, session: UserSession, text: str) -> bool:
+        try:
+            return await self._apply_session_reply(event, session, text)
+        except Exception:
+            logger.exception("[LineBotService] Session trade handling failed")
+            self.reply_message(event.reply_token, [TextMessage(
+                text="⚠️ 交易記錄處理失敗。請先查詢庫存確認結果，再決定是否重新回報。"
+            )])
+            return True
+
+    async def _apply_session_reply(self, event: MessageEvent, session: UserSession, text: str) -> bool:
         """
         處理等待確認中的對話狀態 (確認 / 取消)
         """
@@ -931,10 +951,19 @@ class LineBotService:
             self.reply_message(reply_token, [TextMessage(text="❌ 已取消交易記錄操作。")])
             return True
 
+        if not session.ticker or not re.fullmatch(r"[A-Z0-9.]{1,10}", session.ticker):
+            await self.session_repo.clear_session(user_id)
+            self.reply_message(reply_token, [TextMessage(text="⚠️ 確認對話缺少有效股票代號，未記錄交易。請重新點擊卡片或輸入完整買賣指令。")])
+            return True
+
         if text in ["確認", "OK", "ok", "好"]:
             ticker = session.ticker
             price = session.default_price or 0.0
             shares = session.default_shares or 0.0
+
+            if not self._valid_session_values(price, shares):
+                self.reply_message(reply_token, [TextMessage(text="⚠️ 價格或股數超出允許範圍，未記錄交易。請重新輸入成交價與股數，或回覆「取消」。")])
+                return True
 
             if session.awaiting_action == "CONFIRM_BUY":
                 await self.portfolio_repo.record_buy(ticker=ticker, shares=shares, price=price)
@@ -942,8 +971,7 @@ class LineBotService:
             elif session.awaiting_action == "CONFIRM_SELL":
                 updated = await self.portfolio_repo.record_sell(ticker=ticker, shares=shares)
                 if updated:
-                    rem_shares = updated.shares if updated.status == "holding" else 0
-                    msg = f"🎉 成功記錄賣出！\n標的：{ticker}\n已扣減 {shares:,.0f} 股 (剩餘持股：{rem_shares:,.0f} 股)。"
+                    msg = f"🎉 成功記錄賣出！\n標的：{ticker}\n{self._sell_result_text(updated, shares)}"
                 else:
                     # 例如按了舊卡片的按鈕，而該標的早已賣光：不可回報成功
                     msg = f"⚠️ 找不到持有中的庫存標的 {ticker}（不存在或已賣光），未記錄賣出。"
@@ -954,6 +982,39 @@ class LineBotService:
             self.reply_message(reply_token, [TextMessage(text=msg)])
             return True
 
+        # 確認對話中可直接補充成交價與股數，沿用已選定的標的。
+        details = re.fullmatch(r"(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)", text)
+        if details and session.awaiting_action in ["CONFIRM_BUY", "CONFIRM_SELL"]:
+            price, shares = map(float, details.groups())
+            if not self._valid_session_values(price, shares):
+                self.reply_message(reply_token, [TextMessage(text="⚠️ 價格與股數必須大於 0，成交價不得超過 1,000,000、股數不得超過 1,000,000,000。未記錄交易，請重新輸入。")])
+                return True
+            reference_price = session.extra_data.get("reference_price", session.default_price)
+            if reference_price and (price / reference_price >= 5 or price / reference_price <= 0.2):
+                pending = session.model_copy(update={
+                    "default_price": price, "default_shares": shares,
+                    "extra_data": {**session.extra_data, "reference_price": reference_price},
+                })
+                await self.session_repo.save_session(pending)
+                self.reply_message(reply_token, [TextMessage(text=(
+                    f"⚠️ 成交價與參考價差距較大，尚未記錄交易。\n標的：{session.ticker}\n"
+                    f"成交價：${price:,.2f}\n股數：{shares:,.0f} 股\n"
+                    "請檢查是否輸入錯誤，確認無誤後回覆「確認」，或重新輸入成交價與股數；回覆「取消」可放棄。"
+                ))])
+                return True
+            intent = NLUIntent.RECORD_BUY if session.awaiting_action == "CONFIRM_BUY" else NLUIntent.RECORD_SELL
+            await self._execute_nlu_intent(event, NLUIntentResult(
+                intent=intent, ticker=session.ticker, price=price, shares=shares,
+            ), {})
+            await self.session_repo.clear_session(user_id)
+            return True
+
         # 若使用者直接輸入帶有數值的指令，清除當前 session 交給後續常規解析
         await self.session_repo.clear_session(user_id)
         return False
+
+    @classmethod
+    def _valid_session_values(cls, price: float, shares: float) -> bool:
+        return (math.isfinite(price) and math.isfinite(shares)
+                and 0 < price <= cls.MAX_SESSION_PRICE
+                and 0 < shares <= cls.MAX_SESSION_SHARES)

@@ -132,6 +132,41 @@ def test_postback_then_confirm_records_buy(simulator):
     assert float(holdings["2330"]["shares"]) == 8
 
 
+@pytest.mark.parametrize("report", [
+    "賣出2313 成交價254.5 500股",
+    "賣出 2313 500",
+    "賣出 2313 254.5 500",
+])
+def test_sell_report_updates_persisted_portfolio(simulator, report):
+    import json
+
+    uid = sim_module.DEFAULT_USER_ID
+    simulator.send_text(uid, "買入 2313 200 1000")
+    result = simulator.send_text(uid, report)
+    assert result["http_status"] == 200
+    assert "成功" in _reply_texts(simulator, uid)[-1]
+    holdings = {p["ticker"]: p for p in simulator.get_portfolio()}
+    assert float(holdings["2313"]["shares"]) == 500
+    data = json.loads(Path(simulator.app.state.portfolio_repo.file_path).read_text(encoding="utf-8"))
+    item = next(p for p in data["portfolio"] if p["ticker"] == "2313")
+    assert float(item["shares"]) == 500
+    assert float(item["average_cost"]) == 200
+    assert item["status"] == "holding"
+
+
+@pytest.mark.parametrize("confirmation", ["確認", "254.5 500"])
+def test_postback_sell_updates_portfolio(simulator, confirmation):
+    uid = sim_module.DEFAULT_USER_ID
+    simulator.send_text(uid, "買入 2313 200 1000")
+    simulator.send_postback(uid, "action=sell_click&ticker=2313&shares=500&price=254.5", "手動已賣出")
+    simulator.send_text(uid, confirmation)
+    assert simulator.get_session(uid) is None
+    holdings = {p["ticker"]: p for p in simulator.get_portfolio()}
+    assert float(holdings["2313"]["shares"]) == 500
+    simulator.send_text(uid, "賣出2313 成交價254.5 500股")
+    assert "2313" not in {p["ticker"] for p in simulator.get_portfolio()}
+
+
 SEED_CONTENT = {
     "system_config": {
         "trade_budget_per_order": "88000.0", "profit_alert_threshold": 0.05,

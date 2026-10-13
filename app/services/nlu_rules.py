@@ -141,7 +141,8 @@ def _extract_amount(text: str) -> Optional[float]:
 
 # --- 標的與交易槽位 ----------------------------------------------------------
 
-TW_CODE = r"\b\d{4}\b"
+# 中文與數字都屬於 regex 的 word character，\b 無法辨識「賣出2313」。
+TW_CODE = r"(?<![A-Za-z0-9.])\d{4}(?![A-Za-z0-9.])"
 US_SYMBOL = r"\b[A-Z]{2,5}\b"
 # 這些英文詞在訊息中不是股票代號，避免誤判
 US_STOPWORDS = {"AI", "HPC", "ETF", "EPS", "USD", "TWD", "LINE", "OK", "APP", "IT"}
@@ -279,6 +280,10 @@ class RuleBasedNLU:
             ticker = _extract_ticker(text)
             if ticker:
                 shares, price = _extract_shares_and_price(text)
+                # 說明中允許「賣出 <代號> <股數>」，此格式的裸數字是股數。
+                positional = re.fullmatch(rf"賣出\s+{re.escape(ticker)}\s+({NUM})", text)
+                if positional:
+                    shares, price = float(positional.group(1)), None
                 return NLUIntentResult(
                     intent=NLUIntent.RECORD_SELL,
                     confidence=RULE_CONFIDENCE,

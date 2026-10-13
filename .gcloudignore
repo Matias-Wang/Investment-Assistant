@@ -43,6 +43,7 @@ scripts/test_ui.py
 pytest.ini
 
 # 本機文件與 Claude Code 設定（映像也不需要）
+docs/
 .claude/
 *.md
 !models/nli/README.md

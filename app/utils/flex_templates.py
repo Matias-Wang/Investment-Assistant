@@ -535,7 +535,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
     perf_boxes = []
     for p in performance:
         sign = "+" if p.avg_change_percent >= 0 else ""
-        color = "#C62828" if p.avg_change_percent >= 0 else "#2E7D32"
+        color = "#C62828" if p.avg_change_percent > 0 else "#2E7D32" if p.avg_change_percent < 0 else "#666666"
         perf_boxes.append({
             "type": "box",
             "layout": "vertical",
@@ -544,7 +544,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
             "paddingAll": "6px",
             "flex": 1,
             "contents": [
-                {"type": "text", "text": p.industry, "size": "xxs", "color": "#666666", "align": "center", "wrap": True},
+                {"type": "text", "text": p.industry, "size": "xxs", "color": color, "align": "center", "wrap": True},
                 {"type": "text", "text": f"{sign}{p.avg_change_percent:.2f}%", "size": "xs", "weight": "bold", "color": color, "align": "center"},
                 {"type": "text", "text": " ".join(p.tickers), "size": "xxs", "color": "#999999", "align": "center", "wrap": True},
             ]
@@ -568,6 +568,10 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
     section_boxes = []
     for s in report.industries:
         pct = pct_by_industry.get(s.industry)
+        # 標題與股價漲跌同色；無行情資料時才使用新聞展望的顏色。
+        title_color = outlook_color.get(s.outlook, "#424242") if pct is None else (
+            "#C62828" if pct > 0 else "#2E7D32" if pct < 0 else "#666666"
+        )
         # 展望依新聞判斷、漲跌依股價，兩者可能背離，並列顯示避免誤讀
         price_tag = f"｜股價 {'+' if pct >= 0 else ''}{pct:.2f}%" if pct is not None else ""
         section_boxes.append({
@@ -581,7 +585,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
                     "wrap": True,
                     "size": "xs",
                     "weight": "bold",
-                    "color": outlook_color.get(s.outlook, "#424242"),
+                    "color": title_color,
                 },
                 {"type": "text", "text": s.summary, "size": "xs", "color": "#424242", "wrap": True},
             ]

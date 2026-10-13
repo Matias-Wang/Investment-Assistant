@@ -17,7 +17,8 @@ eval/
 # 本機模擬器的對話紀錄、應用 Log 與隔離用資料檔（含測試者輸入內容）
 data_logs/
 
-# 開發用檔案
+# 開發與本機文件（絕不進入 Docker 映像層）
+docs/
 tests/
 pytest.ini
 requirements-dev.txt
