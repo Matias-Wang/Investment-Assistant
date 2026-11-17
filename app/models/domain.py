@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional, List
+from typing import Dict, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -128,11 +128,13 @@ class NewsItem(BaseModel):
 
 class IndustryPerformance(BaseModel):
     """
-    持股所屬產業的當日表現 (以該產業內持股漲跌幅等權平均)
+    持股所屬產業的最近交易日表現 (以該產業內持股漲跌幅等權平均)
     """
     industry: str
     tickers: List[str] = Field(default_factory=list)
     avg_change_percent: float = 0.0
+    # yfinance 代碼 -> 該檔最新收盤所屬交易日 (交易所當地日期，YYYY-MM-DD)
+    data_dates: Dict[str, str] = Field(default_factory=dict)
 
 
 class MarketIndexItem(BaseModel):
@@ -144,4 +146,5 @@ class MarketIndexItem(BaseModel):
     price: float
     change: float
     change_percent: float
+    data_date: Optional[str] = None  # 最新收盤所屬交易日 (交易所當地日期，YYYY-MM-DD)
 

@@ -1,10 +1,11 @@
 import hmac
-from typing import List, Optional
+from typing import List, Literal, Optional
 from fastapi import APIRouter, Request, HTTPException, Header, Depends, status, Query
 from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.models.domain import SystemConfig, PortfolioItem, SellAlert
 from app.models.llm import BuyRecommendation
+from app.services.market_report_service import MarketDataUnavailable, MarketNotTradedToday
 from app.services.sell_engine import build_no_alert_notice
 
 router = APIRouter(prefix="/api", tags=["System Management & Triggers"])
@@ -173,13 +174,23 @@ async def trigger_market_report(
     request: Request,
     push: bool = False,
     user_id: Optional[str] = None,
+    edition: Optional[Literal["pre", "post"]] = None,
 ):
-    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE"""
+    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE。
+
+    edition 未指定時依目前時間自動判斷盤前／盤後版。休市日指定 post 時回 200 並標示 skipped，
+    避免 Cloud Scheduler 把正常的休市記為失敗而重試。
+    """
     market_report_service = getattr(request.app.state, "market_report_service", None)
     line_service = getattr(request.app.state, "line_service", None)
     if not market_report_service:
         raise HTTPException(status_code=503, detail="Market report service not initialized")
-    report, indices = await market_report_service.generate_market_report()
+    try:
+        report, indices = await market_report_service.generate_market_report(edition=edition)
+    except MarketNotTradedToday as e:
+        return {"report": None, "indices": [], "pushed": False, "skipped": True, "reason": str(e)}
+    except MarketDataUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     pushed = False
     if push and line_service:
         await line_service.push_market_report(report, indices, target_user_id=user_id)
