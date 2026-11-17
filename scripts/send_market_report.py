@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-執行晨間市場報告生成與推播腳本
+執行市場報告 (盤前／盤後快報) 生成與推播腳本
 可用於：
 1. 本地即時測試市場報告產出
-2. 透過作業系統排程 (Windows Task Scheduler / Linux crontab) 每天 08:00 自動執行
+2. 透過作業系統排程 (Windows Task Scheduler / Linux crontab) 定時執行 (版別依執行時間自動判斷：台股收盤 13:30 後為盤後快報，其餘為盤前快報)
 3. CI/CD 驗證流程
 
 使用方式：
@@ -108,7 +108,7 @@ async def run(dry_run: bool = False, target_user_id: str = None) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="晨間市場報告生成與推播腳本")
+    parser = argparse.ArgumentParser(description="市場報告 (盤前／盤後快報) 生成與推播腳本")
     parser.add_argument(
         "--dry-run",
         action="store_true",

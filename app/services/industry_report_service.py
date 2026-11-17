@@ -181,19 +181,39 @@ class IndustryReportService:
     def fetch_industry_performance(
         self, groups: "OrderedDict[str, List[PortfolioItem]]"
     ) -> List[IndustryPerformance]:
+        # 第一階段：抓齊所有持股，記下台股／美股各自的最新資料日
+        fetched: Dict[str, Tuple[float, str]] = {}  # yf 代碼 -> (漲跌幅, 資料日)
+        for items in groups.values():
+            for it in items:
+                try:
+                    got = self._fetch_change_percent(it)
+                except Exception as e:
+                    logger.warning(f"[IndustryReportService] change fetch failed for {it.ticker}: {e}")
+                    got = None
+                if got is not None:
+                    fetched[_yf_symbol(it)] = got
+        latest_by_market: Dict[bool, str] = {}
+        for symbol, (_, day) in fetched.items():
+            market = is_tw_symbol(symbol)
+            latest_by_market[market] = max(day, latest_by_market.get(market, day))
+
+        # 第二階段：資料日落後同市場最新日 (如停牌) 的持股不計入平均，避免把舊行情混成同一天
         result: List[IndustryPerformance] = []
         for industry, items in groups.items():
             changes: List[float] = []
             data_dates: Dict[str, str] = {}
             for it in items:
-                try:
-                    fetched = self._fetch_change_percent(it)
-                except Exception as e:
-                    logger.warning(f"[IndustryReportService] change fetch failed for {it.ticker}: {e}")
-                    fetched = None
-                if fetched is not None:
-                    changes.append(fetched[0])
-                    data_dates[_yf_symbol(it)] = fetched[1]
+                symbol = _yf_symbol(it)
+                if symbol not in fetched:
+                    continue
+                pct, day = fetched[symbol]
+                if day < latest_by_market[is_tw_symbol(symbol)]:
+                    logger.warning(
+                        f"[IndustryReportService] {it.ticker} 資料日 {day} 落後最新交易日，不計入產業平均"
+                    )
+                    continue
+                changes.append(pct)
+                data_dates[symbol] = day
             avg = round(sum(changes) / len(changes), 2) if changes else 0.0
             result.append(IndustryPerformance(
                 industry=industry,

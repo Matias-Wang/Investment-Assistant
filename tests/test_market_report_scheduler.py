@@ -213,11 +213,16 @@ def test_resolve_edition():
     # 指定版別
     assert resolve_edition("pre", PRE_INDICES, _tpe(2026, 11, 17, 8)) == "pre"
     assert resolve_edition("post", POST_INDICES, _tpe(2026, 11, 17, 14)) == "post"
-    # 休市 (台股今日無資料) 或尚未收盤時指定盤後 → 擲出例外
-    with pytest.raises(MarketNotTradedToday):
-        resolve_edition("post", PRE_INDICES, _tpe(2026, 11, 17, 14))
+    # 尚未收盤時指定盤後 → 略過
     with pytest.raises(MarketNotTradedToday):
         resolve_edition("post", POST_INDICES, _tpe(2026, 11, 17, 10))
+    # 交易日 (11/17) 14:00 行情仍停在前一日 → 資料延遲，須告警重試而非略過
+    with pytest.raises(MarketDataUnavailable):
+        resolve_edition("post", PRE_INDICES, _tpe(2026, 11, 17, 14))
+    # 真正休市 (2026-10-09 國慶補假，週五) → 略過
+    holiday = [_idx("^TWII", "2026-10-08"), _idx("^GSPC", "2026-10-08")]
+    with pytest.raises(MarketNotTradedToday):
+        resolve_edition("post", holiday, _tpe(2026, 10, 9, 14))
     # 抓不到台股資料不可誤判為休市
     with pytest.raises(MarketDataUnavailable):
         resolve_edition("post", [_idx("^GSPC", "2026-11-16")], _tpe(2026, 11, 17, 14))
@@ -333,11 +338,30 @@ async def test_generate_post_market_report():
 @pytest.mark.asyncio
 async def test_generate_post_market_report_skips_holiday_without_llm():
     """休市日不呼叫 LLM，直接擲出 MarketNotTradedToday"""
-    svc = _service(PRE_INDICES)
-    with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 11, 17, 14)):
+    svc = _service([_idx("^TWII", "2026-10-08"), _idx("^GSPC", "2026-10-08")])
+    with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 10, 9, 14)):
         with pytest.raises(MarketNotTradedToday):
             await svc.generate_market_report(edition="post")
     svc._call_gemini_report.assert_not_called()
+
+
+def test_tw_trading_calendar():
+    from datetime import date
+    from app.services.market_report_service import is_tw_trading_day
+
+    assert is_tw_trading_day(date(2026, 11, 17)) is True   # 一般交易日
+    assert is_tw_trading_day(date(2026, 10, 9)) is False   # 國慶補假
+    assert is_tw_trading_day(date(2026, 11, 21)) is False  # 週六
+
+
+def test_calendar_unavailable_falls_back_to_skip():
+    """日曆不可用時退回舊行為 (視為休市略過)，不讓整個盤後流程崩潰"""
+    with patch(
+        "app.services.market_report_service._tw_calendar",
+        side_effect=ImportError("no exchange_calendars"),
+    ):
+        with pytest.raises(MarketNotTradedToday):
+            resolve_edition("post", PRE_INDICES, _tpe(2026, 11, 17, 14))
 
 
 @pytest.mark.asyncio
