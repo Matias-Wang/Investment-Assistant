@@ -113,7 +113,11 @@ investment_assistant/
   * 容器內 APScheduler 定時器（本機 `ENABLE_SCHEDULER=true` 時；時間由 `MARKET_REPORT_CRON_*`、`POST_MARKET_REPORT_CRON_*` 設定）。
   * 外部排程（GCP Cloud Scheduler，正式環境使用）呼叫 `POST /api/trigger/market-report?push=true&edition=pre|post`。
     * 未帶 `edition` 時依時間自動判斷；排程請務必明確指定，避免延遲觸發被判成另一版。
-    * 指定 `edition=post` 遇休市回 200 並帶 `"skipped": true`；抓不到台股行情回 503。
+    * 指定 `edition=post` 時，依台灣證交所交易日曆 (`exchange_calendars` 的 XTAI) 判斷：
+      * 休市日：回 200 並帶 `"skipped": true`，不推播。
+      * 交易日卻抓不到當天行情 (yfinance 延遲或故障)：回 503，由 Cloud Scheduler 重試 (見下方 `--max-retry-attempts`)。
+      * 颱風假等臨時休市不在日曆內，會以 503 重試，重試用完後告警，屬預期行為。
+      * 日曆隨映像固定：每年證交所公告隔年休市日後，請升級 `exchange_calendars` 並重建映像。
     * 正式環境需建立的工作（`<…>` 請換成實際值）。
       注意：`--headers` 中的管理金鑰會以明文存進 Cloud Scheduler 設定；下例先以 `read -s` 讀入環境變數，避免留在 shell history。
       ```bash
@@ -129,7 +133,8 @@ investment_assistant/
       gcloud scheduler jobs create http post-market-report \
         --schedule="0 14 * * 1-5" --time-zone="Asia/Taipei" \
         --uri="https://<服務網址>/api/trigger/market-report?push=true&edition=post" \
-        --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}"
+        --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}" \
+        --max-retry-attempts=3 --min-backoff=10m --attempt-deadline=10m
       ```
       若已有 08:00 的工作，改用 `gcloud scheduler jobs update http <工作名稱> --uri=...` 加上 `&edition=pre`。
   * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py`。

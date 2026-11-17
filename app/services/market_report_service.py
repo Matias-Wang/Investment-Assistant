@@ -1,4 +1,5 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
+from functools import lru_cache
 from typing import List, Literal, Tuple, Optional
 from zoneinfo import ZoneInfo
 import yfinance as yf
@@ -29,7 +30,23 @@ class MarketNotTradedToday(Exception):
 
 
 class MarketDataUnavailable(Exception):
-    """要求盤後快報，但抓不到台股加權指數，無法判斷是否休市 (異常，需告警)。"""
+    """要求盤後快報，但交易日卻抓不到當天台股行情 (異常，需告警並由排程重試)。"""
+
+
+@lru_cache(maxsize=1)
+def _tw_calendar():
+    import exchange_calendars  # 載入約需 1 秒，僅在盤後快報需要時才匯入
+
+    return exchange_calendars.get_calendar("XTAI")
+
+
+def is_tw_trading_day(day: date) -> Optional[bool]:
+    """依台灣證交所交易日曆 (XTAI) 判斷是否開市；日曆不可用或超出範圍時回傳 None。"""
+    try:
+        return bool(_tw_calendar().is_session(day.isoformat()))
+    except Exception as e:
+        logger.warning(f"[MarketReportService] 交易日曆查詢失敗，改視為休市: {e}")
+        return None
 
 
 def _taipei_now() -> datetime:
@@ -74,8 +91,9 @@ def build_data_basis(indices: List[MarketIndexItem], now: datetime) -> str:
 def resolve_edition(requested: Optional[Edition], indices: List[MarketIndexItem], now: datetime) -> Edition:
     """決定報告版別。
 
-    - 指定 post：台股今日須已收盤；休市或未收盤擲出 MarketNotTradedToday，
-      抓不到台股資料則擲出 MarketDataUnavailable (不可誤判為休市而默默略過)。
+    - 指定 post：台股今日須已收盤。休市日或未收盤擲出 MarketNotTradedToday；
+      交易日卻抓不到當天行情 (yfinance 延遲或故障) 擲出 MarketDataUnavailable，
+      讓排程告警並重試，而不是誤判為休市默默略過。
     - 未指定 (LINE 手動查詢)：台股今日已收盤才給盤後版，其餘一律盤前版。
     """
     tw = next((i for i in indices if i.symbol == "^TWII"), None)
@@ -88,9 +106,15 @@ def resolve_edition(requested: Optional[Edition], indices: List[MarketIndexItem]
     if requested == "post":
         if not tw or not tw.data_date:
             raise MarketDataUnavailable("無法取得台股加權指數行情，盤後快報未產出。")
-        if not closed_today:
-            raise MarketNotTradedToday("台股今日休市或尚未收盤，略過盤後快報。")
-        return "post"
+        if closed_today:
+            return "post"
+        if today.time() < _TW_SESSION[1]:
+            raise MarketNotTradedToday("台股今日尚未收盤，略過盤後快報。")
+        if is_tw_trading_day(today.date()):
+            raise MarketDataUnavailable(
+                f"今日為台股交易日，但行情仍停在 {tw.data_date}，可能是資料延遲，稍後重試。"
+            )
+        raise MarketNotTradedToday("台股今日休市，略過盤後快報。")
     if requested == "pre":
         return "pre"
     return "post" if closed_today else "pre"

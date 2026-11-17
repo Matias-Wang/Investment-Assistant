@@ -10,6 +10,7 @@ apscheduler>=3.10.4
 httpx>=0.27.0
 beautifulsoup4>=4.12.0
 tenacity>=8.5.0
+exchange_calendars>=4.13.3  # 台股交易日曆 (XTAI)：分辨盤後資料延遲與休市；需含當年度休市日
 python-dotenv>=1.0.1
 lxml>=5.2.0
 pandas>=2.2.0

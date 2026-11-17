@@ -419,3 +419,26 @@ async def test_generate_labels_previous_day_data(report):
     header = str(flex["header"])
     assert "資料基準：台股持股 11/16 收盤" in header
     assert "今日" not in str(flex["body"])
+
+
+def test_stale_holding_excluded_from_industry_average():
+    """同市場中資料日落後 (如停牌) 的持股不計入平均，避免把舊行情混成同一天"""
+    svc = IndustryReportService(AsyncMock(), MagicMock())
+    data = {
+        "3081": (2.0, "2026-11-16"),
+        "6442": (-5.0, "2026-11-12"),  # 停牌，資料停在 11/12
+        "NVDA": (1.0, "2026-11-16"),
+    }
+    svc._fetch_change_percent = MagicMock(side_effect=lambda it: data[it.ticker])
+    groups = {
+        "光通訊": [_item("3081", "聯亞"), _item("6442", "光聖")],
+        "AI": [_item("NVDA", "NVIDIA", asset_type="us_stock")],
+    }
+
+    perf = {p.industry: p for p in svc.fetch_industry_performance(groups)}
+
+    assert perf["光通訊"].avg_change_percent == 2.0
+    assert perf["光通訊"].data_dates == {"3081.TW": "2026-11-16"}
+    assert perf["光通訊"].tickers == ["3081", "6442"]
+    assert perf["AI"].avg_change_percent == 1.0
+
