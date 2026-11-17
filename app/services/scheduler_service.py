@@ -7,7 +7,7 @@ from app.core.logging import logger
 from app.services.sell_engine import SellMonitoringEngine
 from app.services.buy_engine import BuyStrategyEngine
 from app.services.line_bot_service import LineBotService
-from app.services.market_report_service import MarketReportService
+from app.services.market_report_service import Edition, MarketNotTradedToday, MarketReportService
 from app.services.industry_report_service import IndustryReportService
 
 
@@ -16,7 +16,7 @@ class SchedulerService:
     排程服務管理器 (APScheduler)
     - 定期執行賣出監控引擎 (Rule Engine)
     - 定期執行買入策略引擎 (Quantitative + RAG + LLM)
-    - 每日定時自動生成並推播早晨市場快報 (Market Report + Gemini LLM)
+    - 每日定時自動生成並推播盤前／盤後市場快報 (Market Report + Gemini LLM)
     """
 
     def __init__(
@@ -54,16 +54,19 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"[Scheduler] Error in scheduled buy scan: {e}")
 
-    async def scheduled_market_report(self) -> None:
-        """排程每日早上自動生成並推播市場報告 (AI 綜合分析)"""
-        logger.info("[Scheduler] Triggering scheduled morning market report...")
+    async def scheduled_market_report(self, edition: Edition = "pre") -> None:
+        """排程自動生成並推播市場報告 (pre=盤前快報、post=盤後快報)"""
+        logger.info(f"[Scheduler] Triggering scheduled market report (edition={edition})...")
         if not self.market_report_service:
-            logger.warning("[Scheduler] MarketReportService is not configured, skipping morning report.")
+            logger.warning("[Scheduler] MarketReportService is not configured, skipping market report.")
             return
         try:
-            report, indices = await self.market_report_service.generate_market_report()
+            report, indices = await self.market_report_service.generate_market_report(edition=edition)
             await self.line_service.push_market_report(report, indices)
-            logger.info(f"[Scheduler] Successfully pushed morning market report: {report.title}")
+            logger.info(f"[Scheduler] Successfully pushed {report.edition}: {report.title}")
+        except MarketNotTradedToday as e:
+            # 休市日不發盤後快報屬正常情況，不當成錯誤
+            logger.info(f"[Scheduler] Market report skipped: {e}")
         except Exception as e:
             logger.error(f"[Scheduler] Error generating/pushing scheduled market report: {e}")
 
@@ -130,6 +133,23 @@ class SchedulerService:
         )
         logger.info(
             f"[Scheduler] Registered morning market report job at {settings.MARKET_REPORT_CRON_HOUR:02d}:{settings.MARKET_REPORT_CRON_MINUTE:02d} {settings.MARKET_REPORT_CRON_DAYS} (Asia/Taipei)."
+        )
+
+        # 盤後市場報告：台股收盤後執行 (預設台北時間 14:00，週一至週五)
+        self.scheduler.add_job(
+            self.scheduled_market_report,
+            trigger=CronTrigger(
+                day_of_week=settings.POST_MARKET_REPORT_CRON_DAYS,
+                hour=settings.POST_MARKET_REPORT_CRON_HOUR,
+                minute=settings.POST_MARKET_REPORT_CRON_MINUTE,
+                timezone=taipei_tz,
+            ),
+            kwargs={"edition": "post"},
+            id="afternoon_market_report_job",
+            replace_existing=True,
+        )
+        logger.info(
+            f"[Scheduler] Registered post-market report job at {settings.POST_MARKET_REPORT_CRON_HOUR:02d}:{settings.POST_MARKET_REPORT_CRON_MINUTE:02d} {settings.POST_MARKET_REPORT_CRON_DAYS} (Asia/Taipei)."
         )
 
         # 每日產業報告：預設台北時間 08:30 (晚市場快報 30 分鐘，避免兩份 Gemini 呼叫同時發生)

@@ -98,16 +98,40 @@ investment_assistant/
     * 或回覆自訂數值：例如 `買入 2330 1050 10` 或 `賣出 2330 1080 5`。
     * 回覆 `取消`：取消該筆交易記錄。
 
-### 5. 每日晨間市場快報引擎 (Market Report Engine + APScheduler)
-* **定時全自動推播**：每天早上 **08:00**（台北時間 Asia/Taipei）自動執行。
+### 5. 盤前／盤後市場快報引擎 (Market Report Engine)
+* **定時全自動推播**（台北時間 Asia/Taipei）：
+  * **08:00 盤前快報**（每天）：回顧最近一個交易日的台股收盤與隔夜美股，提示開盤觀察重點。
+  * **14:00 盤後快報**（週一至週五）：以當天台股收盤為主軸分析；台股休市時自動略過不發。
+* **資料時點標示**：卡片標題顯示版別，並由程式（非 LLM）標示「資料基準：台股 11/16 收盤・美股 11/16 收盤」；盤中查詢會標「盤中」。08:30 產業報告同樣標示「台股持股／美股持股」的資料時點。
+* **手動查詢**：LINE 輸入 `市場報告` 時，台股當天已收盤 (13:30 後) 給盤後版，其餘時間給盤前版。
 * **多維度資訊彙整**：
   * 抓取四大指標行情：台股加權 (`^TWII`)、標普 500 (`^GSPC`)、費城半導體 (`^SOX`)、台積電 (`2330.TW`)。
   * 檢索近 3 日關鍵總經與半導體財經新聞。
   * 結合用戶當前庫存真實持股組合。
 * **AI 結構化洞察**：透過 Gemini 3.5 提煉市場氛圍、盤勢重點、3 大頭條、個人持股受惠程度與操盤叮嚀。
 * **多元觸發支援**：
-  * 容器內 APScheduler 定時器（每天 08:00 自動推播）。
-  * 外部排程（GCP Cloud Scheduler）呼叫 `POST /api/trigger/market-report?push=true`。
+  * 容器內 APScheduler 定時器（本機 `ENABLE_SCHEDULER=true` 時；時間由 `MARKET_REPORT_CRON_*`、`POST_MARKET_REPORT_CRON_*` 設定）。
+  * 外部排程（GCP Cloud Scheduler，正式環境使用）呼叫 `POST /api/trigger/market-report?push=true&edition=pre|post`。
+    * 未帶 `edition` 時依時間自動判斷；排程請務必明確指定，避免延遲觸發被判成另一版。
+    * 指定 `edition=post` 遇休市回 200 並帶 `"skipped": true`；抓不到台股行情回 503。
+    * 正式環境需建立的工作（`<…>` 請換成實際值）。
+      注意：`--headers` 中的管理金鑰會以明文存進 Cloud Scheduler 設定；下例先以 `read -s` 讀入環境變數，避免留在 shell history。
+      ```bash
+      read -s ADMIN_API_KEY   # 輸入管理金鑰，不回顯
+
+      # 08:00 盤前快報（每天）
+      gcloud scheduler jobs create http pre-market-report \
+        --schedule="0 8 * * *" --time-zone="Asia/Taipei" \
+        --uri="https://<服務網址>/api/trigger/market-report?push=true&edition=pre" \
+        --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}"
+
+      # 14:00 盤後快報（週一至週五）
+      gcloud scheduler jobs create http post-market-report \
+        --schedule="0 14 * * 1-5" --time-zone="Asia/Taipei" \
+        --uri="https://<服務網址>/api/trigger/market-report?push=true&edition=post" \
+        --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}"
+      ```
+      若已有 08:00 的工作，改用 `gcloud scheduler jobs update http <工作名稱> --uri=...` 加上 `&edition=pre`。
   * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py`。
 
 ---
@@ -156,7 +180,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 * 庫存評價 API：`http://localhost:8080/api/portfolio`
 * 手動觸發買入掃描：`POST http://localhost:8080/api/trigger/buy-scan`
 * 手動觸發賣出檢查：`POST http://localhost:8080/api/trigger/sell-check`
-* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true`
+* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true`（可加 `&edition=pre` 或 `&edition=post`）
 * LINE Webhook 端點：`POST http://localhost:8080/callback`
 
 ### 5. 命令列直接執行市場報告 (CLI)

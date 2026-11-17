@@ -1,17 +1,118 @@
-from datetime import datetime, timezone, timedelta
-from typing import List, Tuple, Optional
+from datetime import datetime, time
+from typing import List, Literal, Tuple, Optional
+from zoneinfo import ZoneInfo
 import yfinance as yf
 from google import genai
 from google.genai import types
 
 from app.models.domain import MarketIndexItem, PortfolioItem
-from app.models.llm import MarketReport
+from app.models.llm import MarketReport, MarketReportDraft
 from app.repositories.base import PortfolioRepository
 from app.services.news_service import NewsService
 from app.core.config import settings
 from app.core.gemini_options import thinking_kwargs
 from app.core.logging import logger
 from app.core.retry import with_retry
+
+
+Edition = Literal["pre", "post"]
+EDITION_LABEL = {"pre": "盤前快報", "post": "盤後快報"}
+
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+# 各市場所在時區與收盤時間：用來判斷某根日 K 是「已收盤」還是「盤中」
+_TW_SESSION = (TAIPEI_TZ, time(13, 30))
+_US_SESSION = (ZoneInfo("America/New_York"), time(16, 0))
+
+
+class MarketNotTradedToday(Exception):
+    """要求盤後快報，但台股今日休市或尚未收盤 (正常情況，排程應略過)。"""
+
+
+class MarketDataUnavailable(Exception):
+    """要求盤後快報，但抓不到台股加權指數，無法判斷是否休市 (異常，需告警)。"""
+
+
+def _taipei_now() -> datetime:
+    return datetime.now(TAIPEI_TZ)
+
+
+def _session_of(symbol: str) -> Tuple[ZoneInfo, time]:
+    is_tw = symbol.endswith((".TW", ".TWO")) or symbol == "^TWII"
+    return _TW_SESSION if is_tw else _US_SESSION
+
+
+def is_tw_symbol(symbol: str) -> bool:
+    return _session_of(symbol) is _TW_SESSION
+
+
+def describe_close(symbol: str, data_date: Optional[str], now: datetime) -> str:
+    """把資料日期轉成給人看的時點，例如「11/16 收盤」或「11/17 盤中」。"""
+    if not data_date:
+        return "時點不明"
+    tz, close_at = _session_of(symbol)
+    local_now = now.astimezone(tz)
+    mmdd = data_date[5:].replace("-", "/")
+    if data_date == local_now.strftime("%Y-%m-%d") and local_now.time() < close_at:
+        return f"{mmdd} 盤中"
+    return f"{mmdd} 收盤"
+
+
+def describe_data_time(item: MarketIndexItem, now: datetime) -> str:
+    return describe_close(item.symbol, item.data_date, now)
+
+
+def build_data_basis(indices: List[MarketIndexItem], now: datetime) -> str:
+    """資料基準字串由代碼產生，確保使用者看得到行情是哪一天的。"""
+    parts = []
+    for symbol, label in (("^TWII", "台股"), ("^GSPC", "美股")):
+        item = next((i for i in indices if i.symbol == symbol), None)
+        if item:
+            parts.append(f"{label} {describe_data_time(item, now)}")
+    return "・".join(parts) or "行情資料取得失敗"
+
+
+def resolve_edition(requested: Optional[Edition], indices: List[MarketIndexItem], now: datetime) -> Edition:
+    """決定報告版別。
+
+    - 指定 post：台股今日須已收盤；休市或未收盤擲出 MarketNotTradedToday，
+      抓不到台股資料則擲出 MarketDataUnavailable (不可誤判為休市而默默略過)。
+    - 未指定 (LINE 手動查詢)：台股今日已收盤才給盤後版，其餘一律盤前版。
+    """
+    tw = next((i for i in indices if i.symbol == "^TWII"), None)
+    today = now.astimezone(TAIPEI_TZ)
+    closed_today = bool(
+        tw
+        and tw.data_date == today.strftime("%Y-%m-%d")
+        and today.time() >= _TW_SESSION[1]
+    )
+    if requested == "post":
+        if not tw or not tw.data_date:
+            raise MarketDataUnavailable("無法取得台股加權指數行情，盤後快報未產出。")
+        if not closed_today:
+            raise MarketNotTradedToday("台股今日休市或尚未收盤，略過盤後快報。")
+        return "post"
+    if requested == "pre":
+        return "pre"
+    return "post" if closed_today else "pre"
+
+
+# 版別只描述報告角度；各指數「是哪一天、收盤或盤中」一律以每行標示為準，
+# 不在此寫死 (週末、盤中、美股盤中查詢時寫死的說法會與實際資料矛盾)。
+_EDITION_GUIDE = {
+    "pre": "這是「盤前快報」：以回顧最近一個交易日的行情為主，並提示下一個交易時段的觀察重點。",
+    "post": "這是「盤後快報」：台股今日已收盤，請以今日台股盤勢為分析主軸，其他市場僅作背景參考。",
+}
+
+_TIME_RULE = (
+    "每個指數後方標有「資料時點」(MM/DD 收盤 或 MM/DD 盤中)。描述任何行情時，用字必須與該行標示一致："
+    "標「收盤」者須點明是哪一天的收盤，日期不是今天 ({today}) 就不得說成今日走勢；"
+    "標「盤中」者須說明為盤中暫定數據，不得當成收盤結果。"
+)
+
+_TAKEAWAY_GUIDE = {
+    "pre": "給用戶一句針對下一個交易時段的明確操作心理建設或策略叮嚀",
+    "post": "給用戶一句針對下一個交易日的明確操作心理建設或策略叮嚀",
+}
 
 
 class MarketReportService:
@@ -53,6 +154,7 @@ class MarketReportService:
                 if not df.empty and len(df["Close"]) >= 1:
                     closes = df["Close"].dropna()
                     latest_price = float(closes.iloc[-1])
+                    data_date = closes.index[-1].strftime("%Y-%m-%d")
                     if len(closes) >= 2:
                         prev_price = float(closes.iloc[-2])
                     else:
@@ -66,7 +168,8 @@ class MarketReportService:
                         name=name,
                         price=round(latest_price, 2),
                         change=round(change, 2),
-                        change_percent=round(change_pct, 2)
+                        change_percent=round(change_pct, 2),
+                        data_date=data_date,
                     ))
             except Exception as e:
                 logger.warning(f"[MarketReportService] Failed to fetch index {symbol}: {e}")
@@ -74,10 +177,10 @@ class MarketReportService:
         return items
 
     @with_retry(max_attempts=3, initial_delay=1.0)
-    def _call_gemini_report(self, client: genai.Client, prompt: str) -> MarketReport:
+    def _call_gemini_report(self, client: genai.Client, prompt: str) -> MarketReportDraft:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=MarketReport,
+            response_schema=MarketReportDraft,
             temperature=0.2,
             max_output_tokens=settings.MARKET_REPORT_MAX_OUTPUT_TOKENS,
             **thinking_kwargs(),
@@ -100,25 +203,40 @@ class MarketReportService:
                 raise
 
         if hasattr(response, "parsed") and response.parsed:
-            if isinstance(response.parsed, MarketReport):
+            if isinstance(response.parsed, MarketReportDraft):
                 return response.parsed
             elif isinstance(response.parsed, dict):
-                return MarketReport(**response.parsed)
+                return MarketReportDraft(**response.parsed)
 
         raw_text = response.text
         if not raw_text:
             raise ValueError("Empty response received from Gemini API.")
-        return MarketReport.model_validate_json(raw_text)
+        return MarketReportDraft.model_validate_json(raw_text)
 
-    async def generate_market_report(self) -> Tuple[MarketReport, List[MarketIndexItem]]:
+    async def generate_market_report(
+        self, edition: Optional[Edition] = None
+    ) -> Tuple[MarketReport, List[MarketIndexItem]]:
         """
-        全自動生成即時市場分析報告
+        生成市場分析報告。
+
+        Parameters
+        ----------
+        edition : {"pre", "post"} or None
+            pre 為盤前快報、post 為盤後快報；None 依目前時間與台股是否已收盤自動判斷。
+
+        Raises
+        ------
+        MarketNotTradedToday
+            指定 post 但台股今日無交易資料。
         """
         import asyncio
-        logger.info("[MarketReportService] Generating AI Market Report...")
+        logger.info(f"[MarketReportService] Generating AI Market Report (edition={edition})...")
 
-        # 1. 抓取大盤指數行情
+        # 1. 抓取大盤指數行情，並依資料日期決定版別
         indices = await asyncio.to_thread(self.fetch_market_indices)
+        now = _taipei_now()
+        edition = resolve_edition(edition, indices, now)
+        label = EDITION_LABEL[edition]
 
         # 2. 取得用戶當前庫存清單
         holdings: List[PortfolioItem] = await self.portfolio_repo.get_all(status="holding")
@@ -135,18 +253,23 @@ class MarketReportService:
         index_lines = []
         for idx in indices:
             sign = "+" if idx.change_percent >= 0 else ""
-            index_lines.append(f"{idx.name} ({idx.symbol}): {idx.price} ({sign}{idx.change_percent:.2f}%)")
+            index_lines.append(
+                f"{idx.name} ({idx.symbol}): {idx.price} ({sign}{idx.change_percent:.2f}%)"
+                f"｜資料時點：{describe_data_time(idx, now)}"
+            )
         index_context = "\n".join(index_lines)
 
         # 4. 呼叫 Gemini 3.5 進行綜合結構化推論
         client = self._get_client()
-        today_str = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
 
         prompt = f"""
 你是一位頂級投資顧問與市場首席宏觀分析師。
-請根據以下最新【市場指數行情】、【近3日市場焦點新聞】與【用戶目前持股組合】，為用戶產出一份專業、精準、兼具客觀大局觀與個人化持股洞察的「市場每日快報」。
+請根據以下【市場指數行情】、【近3日市場焦點新聞】與【用戶目前持股組合】，為用戶產出一份專業、精準、兼具客觀大局觀與個人化持股洞察的「{label}」。
 
-【當前市場指數走勢】
+【報告性質】{_EDITION_GUIDE[edition]}
+【資料時點規則】{_TIME_RULE.format(today=now.strftime("%m/%d"))}
+
+【市場指數行情 (含資料時點)】
 {index_context}
 
 【用戶現有持股清單】
@@ -156,19 +279,25 @@ class MarketReportService:
 {news_context}
 
 【分析任務指引】
-1. title: 請撰寫一個具有專業財經視野的精簡快訊標題 (例如：「美科技股反彈引領台股高檔盤整，AI供應鏈動能持續」)。
-2. date_str: 請填入 "{today_str}"。
-3. market_sentiment: 請依據走勢與新聞綜合評估為："樂觀偏多"、"中立震盪"、"保守觀望" 或 "空方承壓"。
-4. index_summary: 簡明扼要點評指數動態與量能結構 (1-2 句話)。
-5. key_headlines: 提煉出 3 則最核心的市場大事件或產業關鍵變化 (每條 20 字以內，明確切中要點)。
-6. portfolio_insight: 針對用戶現有持股 ({holdings_summary})，分析今日市場氛圍與消息面到底對其有利或不利、受惠/受害程度為何。
-7. actionable_takeaway: 給用戶一句明確的短線操作心理建設或策略叮嚀 (例如：續抱強勢標的，或切忌追高留意均線支撐)。
+1. title: 請撰寫一個具有專業財經視野的精簡快訊標題 (例如：「美科技股反彈引領台股高檔盤整，AI供應鏈動能持續」)，用字須符合上述資料時點。
+2. market_sentiment: 請依據走勢與新聞綜合評估為："樂觀偏多"、"中立震盪"、"保守觀望" 或 "空方承壓"。
+3. index_summary: 簡明扼要點評指數動態與量能結構 (1-2 句話)，須點明資料時點。
+4. key_headlines: 提煉出 3 則最核心的市場大事件或產業關鍵變化 (每條 20 字以內，明確切中要點)。
+5. portfolio_insight: 針對用戶現有持股 ({holdings_summary})，分析上述行情與消息面對其有利或不利、受惠/受害程度為何。
+6. actionable_takeaway: {_TAKEAWAY_GUIDE[edition]} (例如：續抱強勢標的，或切忌追高留意均線支撐)。
+(報告版別、資料基準與產出時間由系統填入，無需輸出。)
 
 請務必嚴格輸出為符合 JSON Schema 之結構。
 """.strip()
 
         try:
-            report = await asyncio.to_thread(self._call_gemini_report, client, prompt)
+            draft = await asyncio.to_thread(self._call_gemini_report, client, prompt)
+            report = MarketReport(
+                **draft.model_dump(include=set(MarketReportDraft.model_fields)),
+                date_str=now.strftime("%Y-%m-%d %H:%M"),
+                edition=label,
+                data_basis=build_data_basis(indices, now),
+            )
             return report, indices
         except Exception as e:
             logger.error(f"[MarketReportService] Report generation failed: {e}")

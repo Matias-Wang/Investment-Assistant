@@ -616,7 +616,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
             "layout": "vertical",
             "margin": "sm",
             "contents": [
-                {"type": "text", "text": "🔥 今日產業關鍵焦點:", "size": "xs", "weight": "bold", "color": "#00695C"}
+                {"type": "text", "text": "🔥 產業關鍵焦點:", "size": "xs", "weight": "bold", "color": "#00695C"}
             ] + headline_boxes
         },
         {"type": "separator", "margin": "sm"},
@@ -640,7 +640,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
             "paddingAll": "8px",
             "cornerRadius": "6px",
             "contents": [
-                {"type": "text", "text": "💡 今日操作與風控叮嚀:", "size": "xs", "weight": "bold", "color": "#2E7D32"},
+                {"type": "text", "text": "💡 操作與風控叮嚀:", "size": "xs", "weight": "bold", "color": "#2E7D32"},
                 {"type": "text", "text": report.actionable_takeaway, "size": "xs", "color": "#2E7D32", "wrap": True, "margin": "xs"}
             ]
         },
@@ -664,7 +664,8 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
                     ]
                 },
                 {"type": "text", "text": report.title, "color": "#B2DFDB", "size": "sm", "weight": "bold", "wrap": True, "margin": "xs"},
-                {"type": "text", "text": f"生成時間：{report.date_str}", "color": "#80CBC4", "size": "xxs", "margin": "xs"}
+                {"type": "text", "text": f"資料基準：{report.data_basis}", "color": "#FFFFFF", "size": "xxs", "wrap": True, "margin": "xs"},
+                {"type": "text", "text": f"產出時間：{report.date_str}", "color": "#80CBC4", "size": "xxs", "margin": "xs"}
             ]
         },
         "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": body_contents},
@@ -759,7 +760,7 @@ def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[st
                     "type": "box",
                     "layout": "horizontal",
                     "contents": [
-                        {"type": "text", "text": "📑 AI 每日市場快訊", "color": "#FFFFFF", "weight": "bold", "size": "md", "flex": 3},
+                        {"type": "text", "text": f"📑 AI {report.edition}", "color": "#FFFFFF", "weight": "bold", "size": "md", "flex": 3},
                         {
                             "type": "text",
                             "text": report.market_sentiment,
@@ -782,7 +783,15 @@ def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[st
                 },
                 {
                     "type": "text",
-                    "text": f"生成時間：{report.date_str}",
+                    "text": f"資料基準：{report.data_basis}",
+                    "color": "#FFFFFF",
+                    "size": "xxs",
+                    "wrap": True,
+                    "margin": "xs"
+                },
+                {
+                    "type": "text",
+                    "text": f"產出時間：{report.date_str}",
                     "color": "#BA68C8",
                     "size": "xxs",
                     "margin": "xs"
@@ -815,7 +824,7 @@ def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[st
                     "layout": "vertical",
                     "margin": "sm",
                     "contents": [
-                        {"type": "text", "text": "🔥 今日市場關鍵焦點:", "size": "xs", "weight": "bold", "color": "#311B92"}
+                        {"type": "text", "text": "🔥 市場關鍵焦點:", "size": "xs", "weight": "bold", "color": "#311B92"}
                     ] + headline_boxes
                 },
                 {"type": "separator", "margin": "sm"},
@@ -841,7 +850,7 @@ def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[st
                     "paddingAll": "8px",
                     "cornerRadius": "6px",
                     "contents": [
-                        {"type": "text", "text": "💡 今日操作與風控叮嚀:", "size": "xs", "weight": "bold", "color": "#2E7D32"},
+                        {"type": "text", "text": "💡 操作與風控叮嚀:", "size": "xs", "weight": "bold", "color": "#2E7D32"},
                         {"type": "text", "text": report.actionable_takeaway, "size": "xs", "color": "#2E7D32", "wrap": True, "margin": "xs"}
                     ]
                 }

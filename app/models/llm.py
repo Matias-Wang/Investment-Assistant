@@ -42,12 +42,11 @@ class BuyRecommendation(BaseModel):
     )
 
 
-class MarketReport(BaseModel):
+class MarketReportDraft(BaseModel):
     """
-    Gemini LLM 市場分析報告結構化輸出
+    Gemini LLM 市場分析報告結構化輸出 (僅 LLM 負責的欄位)
     """
     title: str = Field(..., description="市場快訊精簡標題，例如 '台美股市高檔震盪，AI供應鏈動能續強'")
-    date_str: str = Field(..., description="報告生成時間或日期，例如 '2026-09-07'")
     market_sentiment: Literal["樂觀偏多", "中立震盪", "保守觀望", "空方承壓"] = Field(
         ...,
         description="整體市場氛圍評估"
@@ -55,7 +54,7 @@ class MarketReport(BaseModel):
     index_summary: str = Field(..., description="大盤指數與總經走勢精簡解析 (1-2 句話)")
     key_headlines: List[str] = Field(
         default_factory=list,
-        description="3~4 則今日關鍵財經焦點與產業大事"
+        description="3~4 則近期關鍵財經焦點與產業大事"
     )
     portfolio_insight: str = Field(
         ...,
@@ -65,6 +64,13 @@ class MarketReport(BaseModel):
         ...,
         description="給使用者的具體短線操作策略或風控叮嚀 (1 句話)"
     )
+
+
+class MarketReport(MarketReportDraft):
+    """最終推播用市場報告：版別、資料基準與產出時間一律由代碼填入，不經 LLM。"""
+    date_str: str = Field(..., description="報告產出時間，例如 '2026-09-07 08:00'")
+    edition: Literal["盤前快報", "盤後快報"] = "盤前快報"
+    data_basis: str = Field(default="", description="行情資料時點，例如 '台股 11/16 收盤・美股 11/16 收盤'")
 
 
 class IndustrySection(BaseModel):
@@ -86,7 +92,7 @@ class IndustryReportDraft(BaseModel):
     )
     key_headlines: List[str] = Field(
         default_factory=list,
-        description="3~4 則今日關鍵產業大事 (每條 20 字以內)"
+        description="3~4 則近期關鍵產業大事 (每條 20 字以內)"
     )
     portfolio_insight: str = Field(
         ...,
@@ -102,7 +108,7 @@ class IndustryReport(BaseModel):
     """
     每日產業報告完整結構 (格式比照 MarketReport)。
     title / industries / key_headlines / portfolio_insight / actionable_takeaway 來自 LLM；
-    date_str / market_sentiment / index_summary 由代碼產生。
+    date_str / market_sentiment / index_summary / data_basis 由代碼產生。
     """
     title: str = Field(..., description="產業快訊精簡標題，例如 'AI 伺服器與 PCB 供應鏈動能延續'")
     date_str: str = Field(..., description="報告生成時間或日期，例如 '2026-09-07 08:30'")
@@ -110,14 +116,15 @@ class IndustryReport(BaseModel):
         ...,
         description="持股所屬產業的整體氛圍評估"
     )
-    index_summary: str = Field(..., description="各產業今日強弱對比精簡解析 (1-2 句話)")
+    index_summary: str = Field(..., description="各產業最近交易日強弱對比精簡解析 (1-2 句話)")
+    data_basis: str = Field(default="", description="行情資料時點，例如 '台股持股 11/16 收盤'")
     industries: List[IndustrySection] = Field(
         default_factory=list,
         description="每個持股產業一則趨勢解析，順序同【持股產業分組】"
     )
     key_headlines: List[str] = Field(
         default_factory=list,
-        description="3~4 則今日關鍵產業大事 (每條 20 字以內)"
+        description="3~4 則近期關鍵產業大事 (每條 20 字以內)"
     )
     portfolio_insight: str = Field(
         ...,

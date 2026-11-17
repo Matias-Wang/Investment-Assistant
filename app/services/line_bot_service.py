@@ -207,7 +207,7 @@ class LineBotService:
 
         flex_dict = build_market_report_flex_message(report, indices)
         flex_container = FlexContainer.from_dict(flex_dict)
-        flex_msg = FlexMessage(alt_text=f"📑 早安市場快報: {report.title}", contents=flex_container)
+        flex_msg = FlexMessage(alt_text=f"📑 {report.edition}: {report.title}", contents=flex_container)
         self.push_message(uid, [flex_msg])
 
     async def push_industry_report(
