@@ -29,6 +29,7 @@ from app.core.retry import with_retry
 from app.models.line import UserSession
 from app.models.domain import SystemConfig, SellAlert, BuyCandidate, MarketIndexItem, IndustryPerformance
 from app.models.llm import BuyRecommendation, MarketReport, IndustryReport
+from app.services.market_report_service import MARKET_PROFILES, resolve_market
 from app.models.slm import NLUIntent, NLUIntentResult
 from app.services.slm_service import SLMService
 from app.services.nlu_rules import RuleBasedNLU
@@ -198,16 +199,18 @@ class LineBotService:
         report: MarketReport,
         indices: List[MarketIndexItem],
         target_user_id: Optional[str] = None,
+        market: Optional[str] = None,
     ) -> None:
-        """推播市場快報 Flex Message"""
+        """推播市場快報 Flex Message（market: "us" 美股晨報 / "tw" 台股盤後）"""
         uid = target_user_id or settings.LINE_USER_ID
         if not uid:
             logger.warning("[LineBotService] No LINE user ID configured for market report push.")
             return
 
-        flex_dict = build_market_report_flex_message(report, indices)
+        label = MARKET_PROFILES[market].label if market in MARKET_PROFILES else "市場快報"
+        flex_dict = build_market_report_flex_message(report, indices, label=label)
         flex_container = FlexContainer.from_dict(flex_dict)
-        flex_msg = FlexMessage(alt_text=f"📑 早安市場快報: {report.title}", contents=flex_container)
+        flex_msg = FlexMessage(alt_text=f"📑 {label}: {report.title}", contents=flex_container)
         self.push_message(uid, [flex_msg])
 
     async def push_industry_report(
@@ -515,8 +518,9 @@ class LineBotService:
 
                 async def _background_market_report():
                     try:
-                        report, indices = await market_report_service.generate_market_report()
-                        await self.push_market_report(report, indices, target_user_id=user_id)
+                        market = resolve_market()
+                        report, indices = await market_report_service.generate_market_report(market)
+                        await self.push_market_report(report, indices, target_user_id=user_id, market=market)
                     except Exception as e:
                         logger.exception(f"[LineBotService] Error generating market report: {e}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 市場報告生成失敗，請稍後再試。")])
@@ -762,8 +766,9 @@ class LineBotService:
                 self.reply_message(reply_token, [TextMessage(text="📑 正在為您彙整大盤指數、焦點新聞與持股綜合分析，市場快報生成中，請稍候...")])
                 async def _background_market_report():
                     try:
-                        report, indices = await market_report_service.generate_market_report()
-                        await self.push_market_report(report, indices, target_user_id=user_id)
+                        market = resolve_market()
+                        report, indices = await market_report_service.generate_market_report(market)
+                        await self.push_market_report(report, indices, target_user_id=user_id, market=market)
                     except Exception as e:
                         logger.exception(f"[LineBotService] Error generating market report: {e}")
                         self.push_message(user_id, [TextMessage(text="⚠️ 市場報告生成失敗，請稍後再試。")])

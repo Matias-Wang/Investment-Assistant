@@ -173,18 +173,30 @@ async def trigger_market_report(
     request: Request,
     push: bool = False,
     user_id: Optional[str] = None,
+    market: Optional[str] = None,
 ):
-    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE"""
+    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE
+
+    market: "us" 美股晨報 (08:00 排程) / "tw" 台股盤後 (14:00 排程)；
+    未指定時依台北時間自動判斷 (14:00 前為 us，之後為 tw)。
+    """
+    from app.services.market_report_service import resolve_market
+
     market_report_service = getattr(request.app.state, "market_report_service", None)
     line_service = getattr(request.app.state, "line_service", None)
     if not market_report_service:
         raise HTTPException(status_code=503, detail="Market report service not initialized")
-    report, indices = await market_report_service.generate_market_report()
+    try:
+        market = resolve_market(market)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    report, indices = await market_report_service.generate_market_report(market)
     pushed = False
     if push and line_service:
-        await line_service.push_market_report(report, indices, target_user_id=user_id)
+        await line_service.push_market_report(report, indices, target_user_id=user_id, market=market)
         pushed = True
     return {
+        "market": market,
         "report": report.model_dump(),
         "indices": [idx.model_dump() for idx in indices],
         "pushed": pushed,

@@ -65,8 +65,8 @@ async def test_scheduled_market_report_calls_generate_and_push(mock_market_repor
 
     await scheduler.scheduled_market_report()
 
-    market_report_service.generate_market_report.assert_awaited_once()
-    line_service.push_market_report.assert_awaited_once_with(mock_market_report, mock_indices)
+    market_report_service.generate_market_report.assert_awaited_once_with("us")
+    line_service.push_market_report.assert_awaited_once_with(mock_market_report, mock_indices, market="us")
 
 
 @pytest.mark.asyncio
@@ -108,6 +108,14 @@ def test_scheduler_registers_morning_market_report_job():
     job = scheduler.scheduler.get_job("morning_market_report_job")
     assert job is not None
     assert isinstance(job.trigger, CronTrigger)
+    assert job.kwargs == {"market": "us"}
+    assert str(job.trigger.fields[5]) == "8"  # hour
+
+    tw_job = scheduler.scheduler.get_job("tw_market_report_job")
+    assert tw_job is not None
+    assert tw_job.kwargs == {"market": "tw"}
+    assert str(tw_job.trigger.fields[5]) == "14"  # hour
+    assert str(tw_job.trigger.fields[4]) == "mon-fri"  # day_of_week
     scheduler.shutdown()
 
 
@@ -132,7 +140,17 @@ async def test_line_bot_service_push_market_report(mock_market_report, mock_indi
     assert args[0] == "U1234567890"
     messages = args[1]
     assert len(messages) == 1
-    assert "早安市場快報" in messages[0].alt_text
+    assert "市場快報" in messages[0].alt_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market,label", [("us", "美股晨報"), ("tw", "台股盤後快報")])
+async def test_push_market_report_uses_market_label(mock_market_report, mock_indices, market, label):
+    service = LineBotService(MagicMock(), MagicMock(), MagicMock())
+    service.push_message = MagicMock()
+    await service.push_market_report(mock_market_report, mock_indices, target_user_id="U1", market=market)
+    msg = service.push_message.call_args[0][1][0]
+    assert label in msg.alt_text
 
 
 @pytest.mark.asyncio
@@ -151,9 +169,51 @@ async def test_trigger_market_report_endpoint_push(mock_market_report, mock_indi
     mock_request.app.state.market_report_service = market_report_service
     mock_request.app.state.line_service = line_service
 
-    result = await trigger_market_report(mock_request, push=True)
+    result = await trigger_market_report(mock_request, push=True, market="tw")
     assert result["pushed"] is True
+    assert result["market"] == "tw"
+    market_report_service.generate_market_report.assert_awaited_once_with("tw")
     # 端點新增 user_id 參數以支援 Cloud Tasks 指定推播對象
     line_service.push_market_report.assert_awaited_once_with(
-        mock_market_report, mock_indices, target_user_id=None
+        mock_market_report, mock_indices, target_user_id=None, market="tw"
     )
+
+
+@pytest.mark.asyncio
+async def test_trigger_market_report_rejects_unknown_market():
+    from fastapi import HTTPException
+    from app.controllers.api_controller import trigger_market_report
+
+    mock_request = MagicMock()
+    with pytest.raises(HTTPException) as exc:
+        await trigger_market_report(mock_request, market="jp")
+    assert exc.value.status_code == 422
+
+
+def test_resolve_market_by_taipei_time():
+    from datetime import datetime, timezone
+    import app.services.market_report_service as mrs
+
+    class FakeDT(datetime):
+        fixed = None
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fixed
+
+    with patch.object(mrs, "datetime", FakeDT):
+        FakeDT.fixed = datetime(2026, 11, 18, 0, 0, tzinfo=timezone.utc)  # 台北 08:00
+        assert mrs.resolve_market() == "us"
+        FakeDT.fixed = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)  # 台北 14:00
+        assert mrs.resolve_market() == "tw"
+    assert mrs.resolve_market("TW") == "tw"
+
+
+def test_market_profiles_are_separated():
+    """美股晨報只抓美股指數，台股盤後只抓台股標的"""
+    from app.services.market_report_service import MARKET_PROFILES
+
+    us_symbols = [s for s, _ in MARKET_PROFILES["us"].index_targets]
+    tw_symbols = [s for s, _ in MARKET_PROFILES["tw"].index_targets]
+    assert "^TWII" not in us_symbols and not any(s.endswith(".TW") for s in us_symbols)
+    assert all(s == "^TWII" or s.endswith(".TW") for s in tw_symbols)

@@ -98,17 +98,19 @@ investment_assistant/
     * 或回覆自訂數值：例如 `買入 2330 1050 10` 或 `賣出 2330 1080 5`。
     * 回覆 `取消`：取消該筆交易記錄。
 
-### 5. 每日晨間市場快報引擎 (Market Report Engine + APScheduler)
-* **定時全自動推播**：每天早上 **08:00**（台北時間 Asia/Taipei）自動執行。
+### 5. 每日市場快報引擎 (Market Report Engine + APScheduler)
+* **定時全自動推播**（台北時間 Asia/Taipei），一天兩份、市場分開：
+  * **08:00 美股晨報**（`market=us`）：標普 500 (`^GSPC`)、那斯達克 (`^IXIC`)、道瓊 (`^DJI`)、費城半導體 (`^SOX`) + 美股新聞。
+  * **14:00 台股盤後快報**（`market=tw`，週一至週五）：台股加權 (`^TWII`)、台積電 (`2330.TW`)、聯發科 (`2454.TW`)、鴻海 (`2317.TW`) + 台股新聞。
 * **多維度資訊彙整**：
-  * 抓取四大指標行情：台股加權 (`^TWII`)、標普 500 (`^GSPC`)、費城半導體 (`^SOX`)、台積電 (`2330.TW`)。
-  * 檢索近 3 日關鍵總經與半導體財經新聞。
+  * 檢索近 3 日該市場的關鍵財經新聞。
   * 結合用戶當前庫存真實持股組合。
 * **AI 結構化洞察**：透過 Gemini 3.5 提煉市場氛圍、盤勢重點、3 大頭條、個人持股受惠程度與操盤叮嚀。
 * **多元觸發支援**：
-  * 容器內 APScheduler 定時器（每天 08:00 自動推播）。
-  * 外部排程（GCP Cloud Scheduler）呼叫 `POST /api/trigger/market-report?push=true`。
-  * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py`。
+  * 容器內 APScheduler 定時器（08:00 美股、14:00 台股）。
+  * 外部排程（GCP Cloud Scheduler）呼叫 `POST /api/trigger/market-report?push=true&market=us`（08:00）與 `...&market=tw`（14:00）。
+  * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py --market us|tw`。
+  * 未指定 `market` 時（例如 LINE 輸入「市場報告」）依當下台北時間判斷：14:00 前為美股晨報，之後為台股盤後。
 
 ---
 
@@ -156,7 +158,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 * 庫存評價 API：`http://localhost:8080/api/portfolio`
 * 手動觸發買入掃描：`POST http://localhost:8080/api/trigger/buy-scan`
 * 手動觸發賣出檢查：`POST http://localhost:8080/api/trigger/sell-check`
-* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true`
+* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true&market=us`（`market=tw` 為台股盤後）
 * LINE Webhook 端點：`POST http://localhost:8080/callback`
 
 ### 5. 命令列直接執行市場報告 (CLI)
