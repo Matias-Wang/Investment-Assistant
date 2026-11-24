@@ -98,22 +98,19 @@ investment_assistant/
     * 或回覆自訂數值：例如 `買入 2330 1050 10` 或 `賣出 2330 1080 5`。
     * 回覆 `取消`：取消該筆交易記錄。
 
-### 5. 盤前／盤後市場快報引擎 (Market Report Engine)
-* **定時全自動推播**（台北時間 Asia/Taipei）：
-  * **08:00 盤前快報**（每天）：回顧最近一個交易日的台股收盤與隔夜美股，提示開盤觀察重點。
-  * **14:00 盤後快報**（週一至週五）：以當天台股收盤為主軸分析；台股休市時自動略過不發。
-* **資料時點標示**：卡片標題顯示版別，並由程式（非 LLM）標示「資料基準：台股 11/16 收盤・美股 11/16 收盤」；盤中查詢會標「盤中」。08:30 產業報告同樣標示「台股持股／美股持股」的資料時點。
-* **手動查詢**：LINE 輸入 `市場報告` 時，台股當天已收盤 (13:30 後) 給盤後版，其餘時間給盤前版。
+### 5. 每日市場快報引擎 (Market Report Engine + APScheduler)
+* **定時全自動推播**（台北時間 Asia/Taipei），一天兩份、市場分開：
+  * **08:00 美股晨報**（`market=us`，週二至週六）：標普 500 (`^GSPC`)、那斯達克 (`^IXIC`)、道瓊 (`^DJI`)、費城半導體 (`^SOX`) + 美股新聞。
+  * **14:00 台股盤後快報**（`market=tw`，週一至週五）：台股加權 (`^TWII`)、台積電 (`2330.TW`)、聯發科 (`2454.TW`)、鴻海 (`2317.TW`) + 台股新聞；台股休市時自動略過不發。
+* **資料時點標示**：卡片由程式（非 LLM）標示「資料基準：美股 11/16 收盤」或「台股 11/17 收盤」；盤中查詢會標「盤中」。08:30 產業報告同樣標示「台股持股／美股持股」的資料時點。
 * **多維度資訊彙整**：
-  * 抓取四大指標行情：台股加權 (`^TWII`)、標普 500 (`^GSPC`)、費城半導體 (`^SOX`)、台積電 (`2330.TW`)。
-  * 檢索近 3 日關鍵總經與半導體財經新聞。
+  * 檢索近 3 日該市場的關鍵財經新聞。
   * 結合用戶當前庫存真實持股組合。
 * **AI 結構化洞察**：透過 Gemini 3.5 提煉市場氛圍、盤勢重點、3 大頭條、個人持股受惠程度與操盤叮嚀。
 * **多元觸發支援**：
-  * 容器內 APScheduler 定時器（本機 `ENABLE_SCHEDULER=true` 時；時間由 `MARKET_REPORT_CRON_*`、`POST_MARKET_REPORT_CRON_*` 設定）。
-  * 外部排程（GCP Cloud Scheduler，正式環境使用）呼叫 `POST /api/trigger/market-report?push=true&edition=pre|post`。
-    * 未帶 `edition` 時依時間自動判斷；排程請務必明確指定，避免延遲觸發被判成另一版。
-    * 指定 `edition=post` 時，依台灣證交所交易日曆 (`exchange_calendars` 的 XTAI) 判斷：
+  * 容器內 APScheduler 定時器（本機 `ENABLE_SCHEDULER=true` 時；08:00 美股由 `MARKET_REPORT_CRON_*`、14:00 台股由 `TW_MARKET_REPORT_CRON_*` 設定）。
+  * 外部排程（GCP Cloud Scheduler，正式環境使用）呼叫 `POST /api/trigger/market-report?push=true&market=us`（08:00）與 `...&market=tw`（14:00）。
+    * 明確帶 `market=tw` 時，依台灣證交所交易日曆 (`exchange_calendars` 的 XTAI) 判斷：
       * 休市日：回 200 並帶 `"skipped": true`，不推播。
       * 交易日卻抓不到當天行情 (yfinance 延遲或故障)：回 503，由 Cloud Scheduler 重試 (見下方 `--max-retry-attempts`)。
       * 颱風假等臨時休市不在日曆內，會以 503 重試，重試用完後告警，屬預期行為。
@@ -123,32 +120,33 @@ investment_assistant/
       ```bash
       read -s ADMIN_API_KEY   # 輸入管理金鑰，不回顯
 
-      # 08:00 盤前快報（每天）
-      gcloud scheduler jobs create http pre-market-report \
-        --schedule="0 8 * * *" --time-zone="Asia/Taipei" \
-        --uri="https://<服務網址>/api/trigger/market-report?push=true&edition=pre" \
+      # 08:00 美股晨報（週二至週六）
+      gcloud scheduler jobs create http us-market-report \
+        --schedule="0 8 * * 2-6" --time-zone="Asia/Taipei" \
+        --uri="https://<服務網址>/api/trigger/market-report?push=true&market=us" \
         --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}"
 
-      # 14:00 盤後快報（週一至週五）
-      gcloud scheduler jobs create http post-market-report \
+      # 14:00 台股盤後快報（週一至週五）
+      gcloud scheduler jobs create http tw-market-report \
         --schedule="0 14 * * 1-5" --time-zone="Asia/Taipei" \
-        --uri="https://<服務網址>/api/trigger/market-report?push=true&edition=post" \
+        --uri="https://<服務網址>/api/trigger/market-report?push=true&market=tw" \
         --http-method=POST --headers="X-API-Key=${ADMIN_API_KEY}" \
         --max-retry-attempts=3 --min-backoff=10m --attempt-deadline=10m
       ```
-      若已有 08:00 的工作，改用 `gcloud scheduler jobs update http <工作名稱> --uri=...` 加上 `&edition=pre`。
-  * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py`。
+      若已有 08:00 的工作，改用 `gcloud scheduler jobs update http <工作名稱> --uri=...` 加上 `&market=us`。
+  * 本地/伺服器 CLI 腳本 `python scripts/send_market_report.py --market us|tw`。
+  * 未指定 `market` 時（例如 LINE 輸入「市場報告」）依當下台北時間判斷：14:00 前為美股晨報，之後為台股盤後；此時不做休市檢查，休市日會產出最近一個交易日的報告並標示資料日期。
 
 ---
 
 ## 快速開始
 
 ### 1. 安裝環境與依賴
-確保已安裝 Python 3.11+：
+使用 [uv](https://docs.astral.sh/uv/) 管理環境（Python 3.13）：
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv venv --python 3.13 .venv
+source .venv/bin/activate        # 之後的 python 指令都需先啟用 venv
+uv pip install -r requirements.txt
 ```
 
 ### 2. 設定環境變數
@@ -185,22 +183,22 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 * 庫存評價 API：`http://localhost:8080/api/portfolio`
 * 手動觸發買入掃描：`POST http://localhost:8080/api/trigger/buy-scan`
 * 手動觸發賣出檢查：`POST http://localhost:8080/api/trigger/sell-check`
-* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true`（可加 `&edition=pre` 或 `&edition=post`）
+* 手動/排程觸發市場報告推播：`POST http://localhost:8080/api/trigger/market-report?push=true&market=us`（`market=tw` 為台股盤後）
 * LINE Webhook 端點：`POST http://localhost:8080/callback`
 
 ### 5. 命令列直接執行市場報告 (CLI)
 ```bash
-# 產出報告並直接推播至 LINE
-python scripts/send_market_report.py
+# 產出報告並直接推播至 LINE (未指定 --market 時依台北時間判斷：14:00 前為美股，之後為台股)
+python scripts/send_market_report.py --market us
 
 # 僅於終端機測試產出，不發送 LINE (Dry-run)
-python scripts/send_market_report.py --dry-run
+python scripts/send_market_report.py --market tw --dry-run
 ```
 
 ### 6. 本地 LINE 模擬器（UI 端到端測試）
 不需手機或 ngrok，在瀏覽器模擬 LINE 對話，訊息走真實的 `/callback`，且與正式環境完全隔離：
 ```bash
-pip install -r requirements-dev.txt
+uv pip install -r requirements-dev.txt
 streamlit run scripts/test_ui.py   # 須於專案根目錄執行
 ```
 完整測試案例與預期結果見 [UI_TESTING.md](UI_TESTING.md)。

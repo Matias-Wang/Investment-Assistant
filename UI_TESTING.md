@@ -66,14 +66,14 @@
 
 第一次使用需安裝開發依賴（`streamlit` 只在這裡，不在正式的 `requirements.txt`）：
 
-```powershell
-.venv\Scripts\activate
-pip install -r requirements-dev.txt
+```bash
+source .venv/bin/activate
+uv pip install -r requirements-dev.txt
 ```
 
 啟動（**一定要在專案根目錄執行**，否則 `.streamlit/config.toml` 的 127.0.0.1 限制不會生效）：
 
-```powershell
+```bash
 streamlit run scripts/test_ui.py
 ```
 
@@ -291,7 +291,7 @@ Get-Content data_logs\simulator-*.jsonl -Encoding utf8 |
 
 | 狀況 | 原因與處理 |
 | :--- | :--- |
-| `streamlit` 指令找不到 | 沒有啟用 venv，或還沒 `pip install -r requirements-dev.txt` |
+| `streamlit` 指令找不到 | 沒有啟用 venv (`source .venv/bin/activate`)，或還沒 `uv pip install -r requirements-dev.txt` |
 | 頁面一直停在啟動中 | 首次載入 NLI 模型需要時間；若超過 1 分鐘，看終端機錯誤訊息 |
 | 數字跟手冊對不上 | 沒有從「剛重設完」開始，或跳過了前面的案例。按「↺ 重設為測試資料」重來 |
 | 賣出檢查只列出「冷卻中」的部位，沒有卡片 | 6 小時警示冷卻（見 E 段），按重設即可 |
@@ -307,8 +307,8 @@ Get-Content data_logs\simulator-*.jsonl -Encoding utf8 |
 
 模擬器本身也有 pytest，確保隔離與主要流程不會壞掉：
 
-```powershell
-.venv\Scripts\python.exe -m pytest tests/test_line_simulator.py -v
+```bash
+.venv/bin/python -m pytest tests/test_line_simulator.py -v
 ```
 
 涵蓋內容：正式環境設定被覆寫、LINE API 被封鎖、白名單、postback → 確認 → 寫入持股、紀錄寫檔、測試資料格式與「副本不寫回來源」，以及從 `streamlit run` 入口啟動的完整路徑。

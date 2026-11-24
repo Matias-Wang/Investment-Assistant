@@ -131,10 +131,11 @@ class Settings(BaseSettings):
     BUY_CHECK_CRON_MINUTE: int = 0
     MARKET_REPORT_CRON_HOUR: int = 8
     MARKET_REPORT_CRON_MINUTE: int = 0
-    MARKET_REPORT_CRON_DAYS: str = "mon-sun"
-    POST_MARKET_REPORT_CRON_HOUR: int = 14
-    POST_MARKET_REPORT_CRON_MINUTE: int = 0
-    POST_MARKET_REPORT_CRON_DAYS: str = "mon-fri"
+    MARKET_REPORT_CRON_DAYS: str = "tue-sat"  # 美股週一至週五收盤 = 台北週二至週六早上
+    # 下午台股盤後快報 (台股 13:30 收盤)；上方 MARKET_REPORT_* 為早上美股晨報
+    TW_MARKET_REPORT_CRON_HOUR: int = 14
+    TW_MARKET_REPORT_CRON_MINUTE: int = 0
+    TW_MARKET_REPORT_CRON_DAYS: str = "mon-fri"
     INDUSTRY_REPORT_CRON_HOUR: int = 8
     INDUSTRY_REPORT_CRON_MINUTE: int = 30
     INDUSTRY_REPORT_CRON_DAYS: str = "mon-sun"

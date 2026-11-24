@@ -67,9 +67,8 @@ class MarketReportDraft(BaseModel):
 
 
 class MarketReport(MarketReportDraft):
-    """最終推播用市場報告：版別、資料基準與產出時間一律由代碼填入，不經 LLM。"""
+    """最終推播用市場報告：資料基準與產出時間一律由代碼填入，不經 LLM。"""
     date_str: str = Field(..., description="報告產出時間，例如 '2026-09-07 08:00'")
-    edition: Literal["盤前快報", "盤後快報"] = "盤前快報"
     data_basis: str = Field(default="", description="行情資料時點，例如 '台股 11/16 收盤・美股 11/16 收盤'")
 
 

@@ -65,8 +65,8 @@ async def test_scheduled_market_report_calls_generate_and_push(mock_market_repor
 
     await scheduler.scheduled_market_report()
 
-    market_report_service.generate_market_report.assert_awaited_once_with(edition="pre")
-    line_service.push_market_report.assert_awaited_once_with(mock_market_report, mock_indices)
+    market_report_service.generate_market_report.assert_awaited_once_with("us", strict=True)
+    line_service.push_market_report.assert_awaited_once_with(mock_market_report, mock_indices, market="us")
 
 
 @pytest.mark.asyncio
@@ -108,6 +108,14 @@ def test_scheduler_registers_morning_market_report_job():
     job = scheduler.scheduler.get_job("morning_market_report_job")
     assert job is not None
     assert isinstance(job.trigger, CronTrigger)
+    assert job.kwargs == {"market": "us"}
+    assert str(job.trigger.fields[5]) == "8"  # hour
+
+    tw_job = scheduler.scheduler.get_job("tw_market_report_job")
+    assert tw_job is not None
+    assert tw_job.kwargs == {"market": "tw"}
+    assert str(tw_job.trigger.fields[5]) == "14"  # hour
+    assert str(tw_job.trigger.fields[4]) == "mon-fri"  # day_of_week
     scheduler.shutdown()
 
 
@@ -132,7 +140,17 @@ async def test_line_bot_service_push_market_report(mock_market_report, mock_indi
     assert args[0] == "U1234567890"
     messages = args[1]
     assert len(messages) == 1
-    assert "盤前快報" in messages[0].alt_text
+    assert "市場快報" in messages[0].alt_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market,label", [("us", "美股晨報"), ("tw", "台股盤後快報")])
+async def test_push_market_report_uses_market_label(mock_market_report, mock_indices, market, label):
+    service = LineBotService(MagicMock(), MagicMock(), MagicMock())
+    service.push_message = MagicMock()
+    await service.push_market_report(mock_market_report, mock_indices, target_user_id="U1", market=market)
+    msg = service.push_message.call_args[0][1][0]
+    assert label in msg.alt_text
 
 
 @pytest.mark.asyncio
@@ -151,16 +169,58 @@ async def test_trigger_market_report_endpoint_push(mock_market_report, mock_indi
     mock_request.app.state.market_report_service = market_report_service
     mock_request.app.state.line_service = line_service
 
-    result = await trigger_market_report(mock_request, push=True)
+    result = await trigger_market_report(mock_request, push=True, market="tw")
     assert result["pushed"] is True
+    assert result["market"] == "tw"
+    market_report_service.generate_market_report.assert_awaited_once_with("tw", strict=True)
     # 端點新增 user_id 參數以支援 Cloud Tasks 指定推播對象
     line_service.push_market_report.assert_awaited_once_with(
-        mock_market_report, mock_indices, target_user_id=None
+        mock_market_report, mock_indices, target_user_id=None, market="tw"
     )
 
 
+@pytest.mark.asyncio
+async def test_trigger_market_report_rejects_unknown_market():
+    from fastapi import HTTPException
+    from app.controllers.api_controller import trigger_market_report
+
+    mock_request = MagicMock()
+    with pytest.raises(HTTPException) as exc:
+        await trigger_market_report(mock_request, market="jp")
+    assert exc.value.status_code == 422
+
+
+def test_resolve_market_by_taipei_time():
+    from datetime import datetime, timezone
+    import app.services.market_report_service as mrs
+
+    class FakeDT(datetime):
+        fixed = None
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fixed
+
+    with patch.object(mrs, "datetime", FakeDT):
+        FakeDT.fixed = datetime(2026, 11, 18, 0, 0, tzinfo=timezone.utc)  # 台北 08:00
+        assert mrs.resolve_market() == "us"
+        FakeDT.fixed = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)  # 台北 14:00
+        assert mrs.resolve_market() == "tw"
+    assert mrs.resolve_market("TW") == "tw"
+
+
+def test_market_profiles_are_separated():
+    """美股晨報只抓美股指數，台股盤後只抓台股標的"""
+    from app.services.market_report_service import MARKET_PROFILES
+
+    us_symbols = [s for s, _ in MARKET_PROFILES["us"].index_targets]
+    tw_symbols = [s for s, _ in MARKET_PROFILES["tw"].index_targets]
+    assert "^TWII" not in us_symbols and not any(s.endswith(".TW") for s in us_symbols)
+    assert all(s == "^TWII" or s.endswith(".TW") for s in tw_symbols)
+
+
 # ---------------------------------------------------------------------------
-# 盤前／盤後版別與資料時點標示
+# 資料時點標示與台股休市／資料延遲判斷
 # ---------------------------------------------------------------------------
 from datetime import datetime  # noqa: E402
 
@@ -171,7 +231,7 @@ from app.services.market_report_service import (  # noqa: E402
     MarketReportService,
     build_data_basis,
     describe_data_time,
-    resolve_edition,
+    ensure_tw_closed_today,
 )
 from app.models.llm import MarketReportDraft  # noqa: E402
 from app.utils.flex_templates import build_market_report_flex_message  # noqa: E402
@@ -188,10 +248,12 @@ def _idx(symbol: str, data_date: str) -> MarketIndexItem:
     )
 
 
-# 2026-11-17 (二) 08:00：台股最新為 11/16 收盤，美股最新為 11/16 (美東) 收盤
-PRE_INDICES = [_idx("^TWII", "2026-11-16"), _idx("^GSPC", "2026-11-16")]
+# 2026-11-17 (二) 08:00：美股最新為 11/16 (美東) 收盤
+US_INDICES = [_idx("^GSPC", "2026-11-16")]
 # 2026-11-17 (二) 14:00：台股已有 11/17 收盤
-POST_INDICES = [_idx("^TWII", "2026-11-17"), _idx("^GSPC", "2026-11-16")]
+TW_TODAY = [_idx("^TWII", "2026-11-17")]
+# 台股行情仍停在前一交易日
+TW_YESTERDAY = [_idx("^TWII", "2026-11-16")]
 
 
 def test_describe_data_time_marks_close_and_intraday():
@@ -205,34 +267,30 @@ def test_describe_data_time_marks_close_and_intraday():
 
 
 def test_build_data_basis():
-    assert build_data_basis(PRE_INDICES, _tpe(2026, 11, 17, 8)) == "台股 11/16 收盤・美股 11/16 收盤"
+    both = [_idx("^TWII", "2026-11-16"), _idx("^GSPC", "2026-11-16")]
+    assert build_data_basis(both, _tpe(2026, 11, 17, 8)) == "台股 11/16 收盤・美股 11/16 收盤"
+    assert build_data_basis(US_INDICES, _tpe(2026, 11, 17, 8)) == "美股 11/16 收盤"
+    assert build_data_basis(TW_TODAY, _tpe(2026, 11, 17, 14)) == "台股 11/17 收盤"
     assert build_data_basis([], _tpe(2026, 11, 17, 8)) == "行情資料取得失敗"
 
 
-def test_resolve_edition():
-    # 指定版別
-    assert resolve_edition("pre", PRE_INDICES, _tpe(2026, 11, 17, 8)) == "pre"
-    assert resolve_edition("post", POST_INDICES, _tpe(2026, 11, 17, 14)) == "post"
-    # 尚未收盤時指定盤後 → 略過
+def test_ensure_tw_closed_today():
+    # 今日已收盤 → 放行
+    ensure_tw_closed_today(TW_TODAY, _tpe(2026, 11, 17, 14))
+    # 尚未收盤 → 略過
     with pytest.raises(MarketNotTradedToday):
-        resolve_edition("post", POST_INDICES, _tpe(2026, 11, 17, 10))
+        ensure_tw_closed_today(TW_TODAY, _tpe(2026, 11, 17, 10))
     # 交易日 (11/17) 14:00 行情仍停在前一日 → 資料延遲，須告警重試而非略過
     with pytest.raises(MarketDataUnavailable):
-        resolve_edition("post", PRE_INDICES, _tpe(2026, 11, 17, 14))
+        ensure_tw_closed_today(TW_YESTERDAY, _tpe(2026, 11, 17, 14))
     # 真正休市 (2026-10-09 國慶補假，週五) → 略過
-    holiday = [_idx("^TWII", "2026-10-08"), _idx("^GSPC", "2026-10-08")]
     with pytest.raises(MarketNotTradedToday):
-        resolve_edition("post", holiday, _tpe(2026, 10, 9, 14))
+        ensure_tw_closed_today([_idx("^TWII", "2026-10-08")], _tpe(2026, 10, 9, 14))
     # 抓不到台股資料不可誤判為休市
     with pytest.raises(MarketDataUnavailable):
-        resolve_edition("post", [_idx("^GSPC", "2026-11-16")], _tpe(2026, 11, 17, 14))
+        ensure_tw_closed_today([], _tpe(2026, 11, 17, 14))
     with pytest.raises(MarketDataUnavailable):
-        resolve_edition("post", [_idx("^TWII", None)], _tpe(2026, 11, 17, 14))
-    # 自動：收盤前或今日無資料皆為盤前，今日已收盤才是盤後
-    assert resolve_edition(None, PRE_INDICES, _tpe(2026, 11, 17, 8)) == "pre"
-    assert resolve_edition(None, POST_INDICES, _tpe(2026, 11, 17, 10)) == "pre"
-    assert resolve_edition(None, POST_INDICES, _tpe(2026, 11, 17, 14)) == "post"
-    assert resolve_edition(None, PRE_INDICES, _tpe(2026, 11, 22, 15)) == "pre"
+        ensure_tw_closed_today([_idx("^TWII", None)], _tpe(2026, 11, 17, 14))
 
 
 def _draft() -> MarketReportDraft:
@@ -255,41 +313,35 @@ def _service(indices):
 
 
 @pytest.mark.asyncio
-async def test_generate_pre_market_report_labels_past_data():
-    """盤前版：版別與資料基準由代碼填入，prompt 明示台股為前一交易日資料"""
-    svc = _service(PRE_INDICES)
+async def test_generate_us_report_labels_past_data():
+    """美股晨報：資料基準與產出時間由代碼填入，prompt 明示資料時點"""
+    svc = _service(US_INDICES)
     with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 11, 17, 8)):
-        report, _ = await svc.generate_market_report(edition="pre")
+        report, _ = await svc.generate_market_report("us", strict=True)
 
-    assert report.edition == "盤前快報"
-    assert report.data_basis == "台股 11/16 收盤・美股 11/16 收盤"
+    assert report.data_basis == "美股 11/16 收盤"
     assert report.date_str == "2026-11-17 08:00"
     prompt = svc._call_gemini_report.call_args[0][1]
-    assert "盤前快報" in prompt
+    assert "美股晨報" in prompt
     assert "日期不是今天 (11/17) 就不得說成今日走勢" in prompt
     assert "資料時點：11/16 收盤" in prompt
 
 
 @pytest.mark.asyncio
 async def test_prompt_has_no_hardcoded_time_claims_contradicting_labels():
-    """盤中 (10:00) 與美股盤中 (23:00) 查詢時，prompt 不得寫死與標示矛盾的時點"""
-    intraday = [_idx("^TWII", "2026-11-17"), _idx("^GSPC", "2026-11-16")]
-    svc = _service(intraday)
+    """台股盤中 (10:00) 與美股盤中 (23:00) 查詢時，prompt 標示盤中而非寫死今日收盤"""
+    svc = _service(TW_TODAY)
     with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 11, 17, 10)):
-        report, _ = await svc.generate_market_report()
+        await svc.generate_market_report("tw")
     prompt = svc._call_gemini_report.call_args[0][1]
-    assert report.edition == "盤前快報"
     assert "資料時點：11/17 盤中" in prompt
-    assert "前一交易日收盤" not in prompt
+    assert "今日台灣股市" not in prompt
 
-    us_open = [_idx("^TWII", "2026-11-17"), _idx("^GSPC", "2026-11-17")]
-    svc = _service(us_open)
+    svc = _service([_idx("^GSPC", "2026-11-17")])
     with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 11, 17, 23)):
-        report, _ = await svc.generate_market_report()
+        await svc.generate_market_report("us")
     prompt = svc._call_gemini_report.call_args[0][1]
-    assert report.edition == "盤後快報"
     assert "^GSPC (^GSPC): 100.0 (+1.00%)｜資料時點：11/17 盤中" in prompt
-    assert "前一晚收盤" not in prompt
 
 
 def test_fetch_market_indices_takes_exchange_local_date_of_last_valid_close():
@@ -303,46 +355,53 @@ def test_fetch_market_indices_takes_exchange_local_date_of_last_valid_close():
         closes = [100.0, 101.0, float("nan") if nan_last else 102.0]
         return pd.DataFrame({"Open": closes, "Close": closes}, index=idx)
 
-    frames = {
-        "^TWII": frame("Asia/Taipei", nan_last=True),
-        "^GSPC": frame("America/New_York", nan_last=False),
-        "^SOX": frame("America/New_York", nan_last=False),
-        "2330.TW": frame("Asia/Taipei", nan_last=False),
-    }
-
     def fake_ticker(symbol: str) -> MagicMock:
         t = MagicMock()
-        t.history.return_value = frames[symbol]
+        if symbol == "^TWII":
+            t.history.return_value = frame("Asia/Taipei", nan_last=True)
+        elif symbol.endswith(".TW"):
+            t.history.return_value = frame("Asia/Taipei", nan_last=False)
+        else:
+            t.history.return_value = frame("America/New_York", nan_last=False)
         return t
 
     svc = MarketReportService(MagicMock(), MagicMock())
     with patch("app.services.market_report_service.yf.Ticker", side_effect=fake_ticker):
-        items = {i.symbol: i for i in svc.fetch_market_indices()}
+        tw = {i.symbol: i for i in svc.fetch_market_indices("tw")}
+        us = {i.symbol: i for i in svc.fetch_market_indices("us")}
 
-    assert items["^TWII"].data_date == "2026-11-16"
-    assert items["^TWII"].price == 101.0
-    assert items["^GSPC"].data_date == "2026-11-17"
+    assert tw["^TWII"].data_date == "2026-11-16"
+    assert tw["^TWII"].price == 101.0
+    assert us["^GSPC"].data_date == "2026-11-17"
 
 
 @pytest.mark.asyncio
-async def test_generate_post_market_report():
-    svc = _service(POST_INDICES)
+async def test_generate_tw_report_strict_after_close():
+    svc = _service(TW_TODAY)
     with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 11, 17, 14)):
-        report, _ = await svc.generate_market_report(edition="post")
+        report, _ = await svc.generate_market_report("tw", strict=True)
 
-    assert report.edition == "盤後快報"
-    assert report.data_basis == "台股 11/17 收盤・美股 11/16 收盤"
-    assert "以今日台股盤勢為分析主軸" in svc._call_gemini_report.call_args[0][1]
+    assert report.data_basis == "台股 11/17 收盤"
+    assert "台股盤後快報" in svc._call_gemini_report.call_args[0][1]
 
 
 @pytest.mark.asyncio
-async def test_generate_post_market_report_skips_holiday_without_llm():
-    """休市日不呼叫 LLM，直接擲出 MarketNotTradedToday"""
-    svc = _service([_idx("^TWII", "2026-10-08"), _idx("^GSPC", "2026-10-08")])
+async def test_strict_tw_report_skips_holiday_without_llm():
+    """排程 (strict) 遇休市日不呼叫 LLM，直接擲出 MarketNotTradedToday"""
+    svc = _service([_idx("^TWII", "2026-10-08")])
     with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 10, 9, 14)):
         with pytest.raises(MarketNotTradedToday):
-            await svc.generate_market_report(edition="post")
+            await svc.generate_market_report("tw", strict=True)
     svc._call_gemini_report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manual_tw_report_on_holiday_still_generates_with_past_date():
+    """LINE 手動查詢 (非 strict) 遇休市日照常產出，並標示前一交易日收盤"""
+    svc = _service([_idx("^TWII", "2026-10-08")])
+    with patch("app.services.market_report_service._taipei_now", return_value=_tpe(2026, 10, 9, 15)):
+        report, _ = await svc.generate_market_report("tw")
+    assert report.data_basis == "台股 10/08 收盤"
 
 
 def test_tw_trading_calendar():
@@ -355,17 +414,17 @@ def test_tw_trading_calendar():
 
 
 def test_calendar_unavailable_falls_back_to_skip():
-    """日曆不可用時退回舊行為 (視為休市略過)，不讓整個盤後流程崩潰"""
+    """日曆不可用時退回視為休市略過，不讓整個盤後流程崩潰"""
     with patch(
         "app.services.market_report_service._tw_calendar",
         side_effect=ImportError("no exchange_calendars"),
     ):
         with pytest.raises(MarketNotTradedToday):
-            resolve_edition("post", PRE_INDICES, _tpe(2026, 11, 17, 14))
+            ensure_tw_closed_today(TW_YESTERDAY, _tpe(2026, 11, 17, 14))
 
 
 @pytest.mark.asyncio
-async def test_scheduled_post_market_report_skips_on_holiday():
+async def test_scheduled_tw_report_skips_on_holiday():
     line_service = MagicMock()
     line_service.push_market_report = AsyncMock()
     market_report_service = MagicMock()
@@ -375,14 +434,16 @@ async def test_scheduled_post_market_report_skips_on_holiday():
         market_report_service=market_report_service,
     )
 
-    await scheduler.scheduled_market_report(edition="post")
+    with patch("app.services.scheduler_service.logger") as log:
+        await scheduler.scheduled_market_report(market="tw")
 
-    market_report_service.generate_market_report.assert_awaited_once_with(edition="post")
+    market_report_service.generate_market_report.assert_awaited_once_with("tw", strict=True)
     line_service.push_market_report.assert_not_awaited()
+    log.error.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_scheduled_post_market_report_logs_error_when_data_unavailable():
+async def test_scheduled_tw_report_logs_error_when_data_unavailable():
     """抓不到台股資料須記 error，不可當成休市只記 info"""
     line_service = MagicMock()
     line_service.push_market_report = AsyncMock()
@@ -395,7 +456,7 @@ async def test_scheduled_post_market_report_logs_error_when_data_unavailable():
         market_report_service=market_report_service,
     )
     with patch("app.services.scheduler_service.logger") as log:
-        await scheduler.scheduled_market_report(edition="post")
+        await scheduler.scheduled_market_report(market="tw")
     log.error.assert_called_once()
     line_service.push_market_report.assert_not_awaited()
 
@@ -413,57 +474,39 @@ def _api_client(market_report_service: MagicMock):
     return TestClient(app)
 
 
-def test_trigger_endpoint_post_edition_on_holiday_returns_skipped():
+def test_trigger_endpoint_tw_on_holiday_returns_skipped():
     """休市回 200 + skipped，避免 Cloud Scheduler 記為失敗而重試"""
     svc = MagicMock()
     svc.generate_market_report = AsyncMock(side_effect=MarketNotTradedToday("休市"))
-    resp = _api_client(svc).post("/api/trigger/market-report?push=true&edition=post")
+    resp = _api_client(svc).post("/api/trigger/market-report?push=true&market=tw")
     assert resp.status_code == 200
     assert resp.json()["skipped"] is True
     assert resp.json()["pushed"] is False
-    svc.generate_market_report.assert_awaited_once_with(edition="post")
+    svc.generate_market_report.assert_awaited_once_with("tw", strict=True)
 
 
 def test_trigger_endpoint_data_unavailable_returns_503():
     svc = MagicMock()
     svc.generate_market_report = AsyncMock(side_effect=MarketDataUnavailable("無資料"))
-    resp = _api_client(svc).post("/api/trigger/market-report?edition=post")
+    resp = _api_client(svc).post("/api/trigger/market-report?market=tw")
     assert resp.status_code == 503
 
 
-def test_trigger_endpoint_rejects_invalid_edition():
+def test_trigger_endpoint_without_market_is_not_strict(mock_market_report, mock_indices):
+    """未指定 market (手動呼叫) 不做休市檢查"""
     svc = MagicMock()
-    svc.generate_market_report = AsyncMock()
-    resp = _api_client(svc).post("/api/trigger/market-report?edition=noon")
-    assert resp.status_code == 422
-    svc.generate_market_report.assert_not_called()
+    svc.generate_market_report = AsyncMock(return_value=(mock_market_report, mock_indices))
+    resp = _api_client(svc).post("/api/trigger/market-report")
+    assert resp.status_code == 200
+    assert svc.generate_market_report.await_args.kwargs == {"strict": False}
 
 
-def test_scheduler_registers_post_market_report_job():
-    """14:00 週一至週五註冊盤後快報，並以 edition=post 呼叫"""
-    scheduler = SchedulerService(
-        sell_engine=MagicMock(), buy_engine=MagicMock(), line_service=MagicMock(),
-        market_report_service=MagicMock(),
-    )
-    with patch.object(scheduler.scheduler, "start"):
-        scheduler.start()
-
-    job = scheduler.scheduler.get_job("afternoon_market_report_job")
-    assert job is not None
-    assert job.kwargs == {"edition": "post"}
-    fields = {f.name: str(f) for f in job.trigger.fields}
-    assert fields["hour"] == "14"
-    assert fields["minute"] == "0"
-    assert fields["day_of_week"] == "mon-fri"
-    scheduler.shutdown()
-
-
-def test_flex_message_shows_edition_and_data_basis(mock_indices):
+def test_flex_message_shows_label_and_data_basis(mock_indices):
     report = MarketReport(
         **_draft().model_dump(), date_str="2026-11-17 08:00",
-        edition="盤前快報", data_basis="台股 11/16 收盤・美股 11/16 收盤",
+        data_basis="美股 11/16 收盤",
     )
-    flex = build_market_report_flex_message(report, mock_indices)
+    flex = build_market_report_flex_message(report, mock_indices, label="美股晨報")
     texts = str(flex["header"])
-    assert "📑 AI 盤前快報" in texts
-    assert "資料基準：台股 11/16 收盤・美股 11/16 收盤" in texts
+    assert "📑 AI 美股晨報" in texts
+    assert "資料基準：美股 11/16 收盤" in texts

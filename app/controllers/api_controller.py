@@ -1,5 +1,5 @@
 import hmac
-from typing import List, Literal, Optional
+from typing import List, Optional
 from fastapi import APIRouter, Request, HTTPException, Header, Depends, status, Query
 from pydantic import BaseModel, Field
 from app.core.config import settings
@@ -174,28 +174,38 @@ async def trigger_market_report(
     request: Request,
     push: bool = False,
     user_id: Optional[str] = None,
-    edition: Optional[Literal["pre", "post"]] = None,
+    market: Optional[str] = None,
 ):
-    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE。
+    """手動或外部排程觸發市場快訊報告 (AI 綜合分析)，可選是否推播至 LINE
 
-    edition 未指定時依目前時間自動判斷盤前／盤後版。休市日指定 post 時回 200 並標示 skipped，
-    避免 Cloud Scheduler 把正常的休市記為失敗而重試。
+    market: "us" 美股晨報 (08:00 排程) / "tw" 台股盤後 (14:00 排程)；
+    未指定時依台北時間自動判斷 (14:00 前為 us，之後為 tw)。
+    明確指定 market 時 (Cloud Scheduler) 為嚴格模式：台股休市回 200 並標示 skipped，
+    避免排程把正常的休市記為失敗而重試；交易日抓不到台股行情則回 503 告警。
     """
+    from app.services.market_report_service import resolve_market
+
     market_report_service = getattr(request.app.state, "market_report_service", None)
     line_service = getattr(request.app.state, "line_service", None)
     if not market_report_service:
         raise HTTPException(status_code=503, detail="Market report service not initialized")
+    strict = bool(market)
     try:
-        report, indices = await market_report_service.generate_market_report(edition=edition)
+        market = resolve_market(market)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    try:
+        report, indices = await market_report_service.generate_market_report(market, strict=strict)
     except MarketNotTradedToday as e:
-        return {"report": None, "indices": [], "pushed": False, "skipped": True, "reason": str(e)}
+        return {"market": market, "report": None, "indices": [], "pushed": False, "skipped": True, "reason": str(e)}
     except MarketDataUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     pushed = False
     if push and line_service:
-        await line_service.push_market_report(report, indices, target_user_id=user_id)
+        await line_service.push_market_report(report, indices, target_user_id=user_id, market=market)
         pushed = True
     return {
+        "market": market,
         "report": report.model_dump(),
         "indices": [idx.model_dump() for idx in indices],
         "pushed": pushed,

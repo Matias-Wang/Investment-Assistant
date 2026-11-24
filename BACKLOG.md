@@ -76,3 +76,46 @@
 
 * 本機是否已具備 Java 與模擬器元件，提出時尚未確認；開工前先檢查。
 * 若之後改用 CI，模擬器需在 CI 環境中啟動；本專案目前沒有 CI 設定。
+
+---
+
+## B-003　補齊市場快報的測試缺口
+
+* **提出日期**：2026-11-24
+* **狀態**：待辦
+* **來源**：美股晨報／台股盤後快報合併後的審查 (L-4)。
+
+### 現況
+
+* `app/services/line_bot_service.py` 中兩個 `_background_market_report`（LINE 輸入「市場報告」的路徑）沒有測試，無法確認它們以非 strict 呼叫 `generate_market_report`，並把 `market` 傳給 `push_market_report`。
+* 沒有測試 `market=TW` 這類大小寫輸入會正規化為 `"tw"`（API 與 CLI 皆經 `resolve_market`）。
+* `test_tw_trading_calendar` 直接查詢真實的 2026 年 XTAI 日曆；跨年或升級 `exchange_calendars` 後日期可能不再適用。
+
+### 要改成
+
+1. 為 LINE 手動查詢路徑補測試：mock `resolve_market` 與 `market_report_service`，驗證呼叫參數。
+2. API 測試補上 `market=TW`，驗證回應的 `market` 為 `"tw"` 且以 strict 呼叫。
+3. 交易日曆測試改為不依賴特定年份（例如 mock `_tw_calendar`），或於檔案註明需隨年份更新。
+
+### 驗收條件
+
+- [ ] LINE 手動查詢的兩條路徑皆有測試，確認 `strict` 未啟用且推播帶正確 `market`
+- [ ] `market=TW` 正規化有測試
+- [ ] 交易日曆測試不會因跨年而失敗
+
+---
+
+## B-004　交易日曆查詢失敗時的行為（待評估）
+
+* **提出日期**：2026-11-24
+* **狀態**：待評估
+* **來源**：美股晨報／台股盤後快報合併後的審查 (L-2)。
+
+### 現況
+
+`app/services/market_report_service.py` 的 `is_tw_trading_day` 查詢失敗時回傳 `None`，`ensure_tw_closed_today` 會因此當成休市並略過（API 回 200 skipped）。若當天其實是交易日、只是行情延遲，就會**靜默漏發**台股盤後快報，Cloud Scheduler 也不會重試。這是刻意的取捨（避免日曆壞掉時排程不斷失敗），且有測試 `test_calendar_unavailable_falls_back_to_skip` 鎖住。
+
+### 要評估
+
+* 改為日曆不可用時回 503（讓排程重試並告警），或維持略過但記 ERROR log 以便察覺。
+* 若改變行為，需同步更新上述測試與 README 的說明。

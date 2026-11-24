@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-執行市場報告 (盤前／盤後快報) 生成與推播腳本
+執行市場報告 (美股晨報／台股盤後快報) 生成與推播腳本
 可用於：
 1. 本地即時測試市場報告產出
-2. 透過作業系統排程 (Windows Task Scheduler / Linux crontab) 定時執行 (版別依執行時間自動判斷：台股收盤 13:30 後為盤後快報，其餘為盤前快報)
+2. 透過作業系統排程 (Windows Task Scheduler / Linux crontab) 定時執行 (未指定 --market 時依台北時間判斷：14:00 前為美股晨報，之後為台股盤後快報)
 3. CI/CD 驗證流程
 
 使用方式：
@@ -37,11 +37,11 @@ from app.repositories.factory import (
     get_session_repository,
 )
 from app.services.news_service import NewsService
-from app.services.market_report_service import MarketReportService
+from app.services.market_report_service import MarketReportService, resolve_market
 from app.services.line_bot_service import LineBotService
 
 
-async def run(dry_run: bool = False, target_user_id: str = None) -> None:
+async def run(dry_run: bool = False, target_user_id: str = None, market: str = None) -> None:
     logger.info("=== 啟動早晨市場報告生成任務 ===")
     
     # 初始化倉儲與服務
@@ -63,7 +63,8 @@ async def run(dry_run: bool = False, target_user_id: str = None) -> None:
     
     print("\n⏳ 正在抓取市場行情、焦點新聞與庫存持股，請稍候...")
     try:
-        report, indices = await market_report_service.generate_market_report()
+        market = resolve_market(market)
+        report, indices = await market_report_service.generate_market_report(market)
     except Exception as e:
         logger.error(f"市場報告生成失敗: {e}")
         print(f"❌ 錯誤: 市場報告生成失敗: {e}")
@@ -103,12 +104,12 @@ async def run(dry_run: bool = False, target_user_id: str = None) -> None:
         return
 
     print(f"🚀 正在推播市場報告至 LINE 使用者: {recipient} ...")
-    await line_service.push_market_report(report, indices, target_user_id=recipient)
+    await line_service.push_market_report(report, indices, target_user_id=recipient, market=market)
     print("✅ LINE 市場報告推播完成！")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="市場報告 (盤前／盤後快報) 生成與推播腳本")
+    parser = argparse.ArgumentParser(description="市場報告 (美股晨報／台股盤後快報) 生成與推播腳本")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -120,9 +121,15 @@ def main():
         default=None,
         help="指定接收報告的 LINE 使用者 ID (若未指定則使用 .env 中的 LINE_USER_ID)",
     )
+    parser.add_argument(
+        "--market",
+        choices=["us", "tw"],
+        default=None,
+        help="us=美股晨報 (08:00)、tw=台股盤後 (14:00)；未指定時依台北時間自動判斷",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run(dry_run=args.dry_run, target_user_id=args.user_id))
+    asyncio.run(run(dry_run=args.dry_run, target_user_id=args.user_id, market=args.market))
 
 
 if __name__ == "__main__":
