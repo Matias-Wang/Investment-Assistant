@@ -179,7 +179,7 @@
 系統已升級支援 **SLM (Small Language Model，如 Qwen 2.5)** 自然語言理解，讓您可以直接用口語在 LINE 對話記帳或調整設定！
 
 ### 步驟 1：在 VS Code 開啟 Colab 筆記本
-1. 在 VS Code 中開啟 [`scripts/colab_slm_serving.ipynb`](file:///C:/Users/freea/Desktop/investment_assistant/scripts/colab_slm_serving.ipynb)。
+1. 在 VS Code 中開啟 [`scripts/colab_slm_serving.ipynb`](scripts/colab_slm_serving.ipynb)。
 2. 透過 VS Code 的 Google Colab 擴充套件，在右上方核心連線至您的 **Colab Pro (GPU 執行階段，如 T4 或 L4)**。
 
 ### 步驟 2：一鍵運行筆記本
