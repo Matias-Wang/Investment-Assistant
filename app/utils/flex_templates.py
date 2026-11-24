@@ -686,7 +686,7 @@ def build_industry_report_flex_message(report: Any, performance: List[Any]) -> D
     }
 
 
-def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[str, Any]:
+def build_market_report_flex_message(report: Any, indices: List[Any], label: str = "每日市場快訊") -> Dict[str, Any]:
     """
     建立每日市場快報 Flex Message
     """
@@ -759,7 +759,7 @@ def build_market_report_flex_message(report: Any, indices: List[Any]) -> Dict[st
                     "type": "box",
                     "layout": "horizontal",
                     "contents": [
-                        {"type": "text", "text": "📑 AI 每日市場快訊", "color": "#FFFFFF", "weight": "bold", "size": "md", "flex": 3},
+                        {"type": "text", "text": f"📑 AI {label}", "color": "#FFFFFF", "weight": "bold", "size": "md", "flex": 3},
                         {
                             "type": "text",
                             "text": report.market_sentiment,
